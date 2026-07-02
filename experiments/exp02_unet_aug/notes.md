@@ -1,0 +1,9 @@
+# exp02_unet_aug
+
+Baseline / condition: _fill in after run_
+Started:
+Finished:
+Best val Dice (epoch):
+Test Dice / IoU / Precision / Recall:
+Coverage MAE / RMSE / Pearson r:
+Observations:

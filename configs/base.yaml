@@ -1,0 +1,35 @@
+# Shared across every experiment. Model-specific files (unet.yaml,
+# attention_unet.yaml) are merged on top of this at run time.
+
+paths:
+  raw_images_dir: "data/raw/images"
+  raw_masks_dir: "data/raw/masks"
+  raw_annotations: "data/raw/annotations/dataset.json"
+  processed_images_dir: "data/processed/images"
+  lesion_masks_dir: "data/processed/lesion_masks"
+  leaf_masks_dir: "data/processed/leaf_masks"        # produced once by pipelines/generate_leaf_masks.py
+  manifest_csv: "data/processed/manifest.csv"
+  split_dir: "data/splits"
+  checkpoints_dir: "outputs/checkpoints"
+  logs_dir: "outputs/logs"
+  figures_dir: "outputs/figures"
+
+data:
+  label_statuses: ["LABELED", "REVIEWED"]   # proposal §4.1.1: exclude samples with no ground truth
+  image_size: 256                            # §4.2.5 debug size for faster iteration
+  seed: 42
+  split_ratios: [0.70, 0.15, 0.15]           # §4.2.3
+  stratify_bins: 3                           # low / medium / high coverage bins
+
+processing:
+  workers: 4                                # set >1 to parallelize I/O-heavy mask generation
+
+training:
+  optimizer: "adam"
+  learning_rate: 0.0001
+  batch_size: 8
+  max_epochs: 100
+  early_stopping_patience: 15
+  loss: "bce_dice"                           # §4.2.8
+  threshold: 0.5                             # §4.2.7
+  augmentation: false                        # overridden per experiment, see experiments/*/config.yaml

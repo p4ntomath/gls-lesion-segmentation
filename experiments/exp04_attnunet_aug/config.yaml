@@ -1,0 +1,4 @@
+extends: ["configs/base.yaml", "configs/attention_unet.yaml"]
+overrides:
+  training:
+    augmentation: true

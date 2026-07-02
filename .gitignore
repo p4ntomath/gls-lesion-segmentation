@@ -1,0 +1,40 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Keep the folder structure in the repo, but ignore the local data payload.
+data/raw/images/**
+!data/raw/images/
+!data/raw/images/.gitkeep
+
+data/raw/masks/**
+!data/raw/masks/
+!data/raw/masks/.gitkeep
+
+# The only local input file you should place here is dataset.json.
+# It is ignored by Git so your local dataset stays out of version control.
+data/raw/annotations/**
+!data/raw/annotations/
+!data/raw/annotations/.gitkeep
+
+# Generated preprocessing and training outputs stay local.
+data/processed/**
+!data/processed/
+!data/processed/.gitkeep
+!data/processed/images/
+!data/processed/images/.gitkeep
+!data/processed/lesion_masks/
+!data/processed/lesion_masks/.gitkeep
+!data/processed/leaf_masks/
+!data/processed/leaf_masks/.gitkeep
+
+data/splits/**
+!data/splits/
+!data/splits/.gitkeep
+
+outputs/checkpoints/*.pt
+outputs/logs/*.csv
+outputs/figures/
+experiments/*/results.json
+*.ipynb_checkpoints
+.DS_Store

@@ -1,0 +1,9 @@
+# Model-specific overrides, merged on top of configs/base.yaml.
+
+model:
+  name: "attention_unet"
+  in_channels: 3
+  out_channels: 1
+  base_filters: 64
+  depth: 4
+  attention_inter_channels: null

@@ -1,0 +1,7 @@
+# Resolved snapshot for this run: configs/base.yaml + configs/unet.yaml,
+# with the one override below. Generated/copied here at run start so the
+# exact settings used are preserved even if configs/ changes later.
+extends: ["configs/base.yaml", "configs/unet.yaml"]
+overrides:
+  training:
+    augmentation: false
