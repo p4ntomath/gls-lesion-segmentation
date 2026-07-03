@@ -199,17 +199,37 @@ def compute_coverage_metrics(pred_coverage: np.ndarray, ref_coverage: np.ndarray
     }
 
 
-def _load_leaf_masks(leaf_masks_dir: Path, sample_ids: list[str]) -> dict[str, np.ndarray]:
+
+
+
+def _load_leaf_masks(leaf_masks_dir: Path, sample_ids: list[str], image_size: int) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Load whichever leaf masks are actually available on disk.
+
+    Leaf masks come from the separate pipelines/generate_leaf_masks.py step
+    (YOLO+SAM, QA-inspected), not from scripts/preprocess.py -- deliberately
+    decoupled from training so training never depends on SAM (see README).
+    That means it's entirely normal for this to be run before leaf
+    extraction finishes, or for a handful of samples to fail QA and never
+    get a leaf mask.
+
+    Returns (leaf_masks, missing_ids) instead of raising, so evaluation can
+    still report full segmentation metrics (Dice/IoU/precision/recall, which
+    don't need leaf masks at all) even when leaf-area coverage isn't ready.
+    """
     from PIL import Image
 
     leaf_masks: dict[str, np.ndarray] = {}
+    missing: list[str] = []
     for sample_id in sample_ids:
         leaf_path = leaf_masks_dir / f"{sample_id}.png"
         if not leaf_path.exists():
-            raise FileNotFoundError(f"Leaf mask not found: {leaf_path}")
+            missing.append(sample_id)
+            continue
         image = Image.open(leaf_path).convert("L")
+        if image.size != (image_size, image_size):
+            image = image.resize((image_size, image_size), resample=Image.NEAREST)
         leaf_masks[sample_id] = (np.asarray(image, dtype=np.uint8) > 0).astype(np.uint8)
-    return leaf_masks
+    return leaf_masks, missing
 
 
 def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
@@ -223,31 +243,59 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
     test_loader = build_test_loader(config)
     predictions, ground_truth = run_inference(model, test_loader, set_device)
 
-    leaf_masks = _load_leaf_masks(Path(config["paths"]["leaf_masks_dir"]), sorted(ground_truth))
-    coverage_df = coverage_for_split(predictions, ground_truth, leaf_masks)
+    image_size = int(config.get("data", {}).get("image_size", 256))
+    leaf_masks, missing_leaf_ids = _load_leaf_masks(Path(config["paths"]["leaf_masks_dir"]), sorted(ground_truth), image_size)
 
     segmentation_summary, per_image = compute_segmentation_metrics(predictions, ground_truth)
-    coverage_summary = compute_coverage_metrics(
-        coverage_df["predicted_coverage"].to_numpy(), coverage_df["reference_coverage"].to_numpy()
-    )
 
-    combined_per_image = []
-    coverage_index = {row["sample_id"]: row for row in coverage_df.to_dict(orient="records")}
-    for row in per_image:
-        sample_id = row["sample_id"]
-        combined = {
-            **row,
-            "predicted_coverage": coverage_index[sample_id]["predicted_coverage"],
-            "reference_coverage": coverage_index[sample_id]["reference_coverage"],
-        }
-        combined_per_image.append(combined)
+    coverage_summary: dict = {}
+    combined_per_image = [dict(row) for row in per_image]
+
+    if leaf_masks:
+        # Only score coverage for samples that actually have a leaf mask --
+        # compute_coverage_metrics/coverage_for_split would otherwise raise
+        # on the missing ones.
+        available_ids = set(leaf_masks)
+        pred_subset = {k: v for k, v in predictions.items() if k in available_ids}
+        gt_subset = {k: v for k, v in ground_truth.items() if k in available_ids}
+
+        coverage_df = coverage_for_split(pred_subset, gt_subset, leaf_masks)
+        coverage_summary = compute_coverage_metrics(
+            coverage_df["predicted_coverage"].to_numpy(), coverage_df["reference_coverage"].to_numpy()
+        )
+        coverage_index = {row["sample_id"]: row for row in coverage_df.to_dict(orient="records")}
+        for row in combined_per_image:
+            sample_id = row["sample_id"]
+            cov = coverage_index.get(sample_id)
+            if cov is not None:
+                row["predicted_coverage"] = cov["predicted_coverage"]
+                row["reference_coverage"] = cov["reference_coverage"]
+
+    if missing_leaf_ids:
+        if leaf_masks:
+            print(
+                f"WARNING: {len(missing_leaf_ids)}/{len(ground_truth)} test samples have no leaf mask yet. "
+                f"Segmentation metrics (Dice/IoU/precision/recall) below cover all {len(ground_truth)} "
+                f"test samples. Leaf-area coverage metrics only cover the {len(leaf_masks)} samples that "
+                f"have a leaf mask. Run pipelines/generate_leaf_masks.py to fill in the rest, then "
+                f"re-run this script to get coverage metrics over the full test set."
+            )
+        else:
+            print(
+                f"WARNING: no leaf masks found for any of the {len(ground_truth)} test samples. "
+                f"Segmentation metrics (Dice/IoU/precision/recall) below are still complete and valid. "
+                f"Leaf-area coverage metrics were skipped entirely -- run "
+                f"pipelines/generate_leaf_masks.py first, then re-run this script to get them."
+            )
 
     results = {
         "experiment": experiment,
         "summary": {
             **segmentation_summary,
-            **coverage_summary,
-            "num_samples": len(combined_per_image),
+            "coverage": coverage_summary if coverage_summary else "skipped -- no leaf masks available yet",
+            "num_samples": len(ground_truth),
+            "num_samples_with_leaf_mask": len(leaf_masks),
+            "num_samples_missing_leaf_mask": len(missing_leaf_ids),
         },
         "per_image": combined_per_image,
     }

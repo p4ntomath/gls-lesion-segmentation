@@ -149,6 +149,45 @@ python scripts/evaluate.py --experiment exp01_unet_noaug --config configs/base.y
 py -m pytest -q tests/test_dataset.py
 ```
 
+## Leaf mask pipeline (one-shot)
+
+This repository includes a separate one-shot pipeline that extracts high-quality
+binary leaf masks (used for leaf-area coverage calculations) using a YOLO-based
+leaf detector + the Segment-Anything Model (SAM). Run this once, independently
+of the normal `preprocess` flow.
+
+Prerequisites:
+- Ensure the repository dependencies are installed (see step 3). The `requirements.txt`
+   already includes `ultralytics`, `huggingface_hub`, and `segment-anything`.
+- A CUDA-capable GPU is recommended for reasonable processing time though the
+   pipeline will run on CPU (slower) if a GPU is not available.
+
+Run the pipeline (uses `configs/base.yaml` by default):
+
+```bash
+python pipelines/generate_leaf_masks.py
+```
+
+What it does:
+- Downloads a small YOLO model from the HuggingFace hub and the SAM checkpoint
+   (cached under `~/.cache/segment_anything/`).
+- Processes every image in `data/raw/images/` and writes binary masks to
+   `data/processed/leaf_masks/` (filename: `<sample_id>.png`).
+- Saves visual QA overlays to `outputs/figures/leaf_mask_qa/` for manual inspection.
+- Skips samples that already have a saved mask so the pipeline is resumable.
+
+Notes & tips:
+- The pipeline may download ~100–200 MB of model weights on first run.
+- If you want to change paths or configuration, edit `configs/base.yaml` before
+   running the script.
+- If you prefer a CLI-style config argument, run the pipeline from Python:
+
+```python
+from pipelines.generate_leaf_masks import main
+main("configs/base.yaml")
+```
+
+
 ## Planned build order
 
 1.  **`src/data/parse_dataset.py`** → `data/processed/manifest.csv`
