@@ -261,6 +261,116 @@ def save_multiple_predictions(
         plt.close(fig)
 
 
+def plot_confidence_heatmap(
+    image: np.ndarray,
+    probs: np.ndarray,
+    save_path: str | Path | None = None,
+    title: str | None = None,
+    alpha: float = 0.6,
+):
+    """
+    Overlay the model's raw per-pixel confidence (post-sigmoid probability,
+    NOT thresholded) as a heatmap, with a colorbar. Requested by supervisor
+    review: shows where the model is confident vs uncertain, rather than
+    collapsing everything to a binary yes/no lesion call.
+
+    Args:
+        image: (H, W, 3) uint8 RGB image.
+        probs: (H, W) float array in [0, 1] -- raw sigmoid output, same
+            spatial size as image. NOT the binarized prediction.
+        alpha: opacity of the heatmap overlay, in [0, 1].
+
+    Returns:
+        matplotlib.figure.Figure
+    """
+    probs = np.asarray(probs)
+    if probs.shape != image.shape[:2]:
+        raise ValueError(f"probs shape {probs.shape} doesn't match image shape {image.shape[:2]}")
+    if probs.min() < 0 or probs.max() > 1:
+        raise ValueError(
+            f"probs must be in [0, 1] (raw sigmoid output) -- got range "
+            f"[{probs.min():.3f}, {probs.max():.3f}]. Did you pass a binarized "
+            f"mask by mistake?"
+        )
+
+    fig, ax = plt.subplots(figsize=(5.5, 5))
+    ax.imshow(image)
+    im = ax.imshow(probs, cmap="inferno", alpha=alpha, vmin=0, vmax=1)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("predicted lesion probability")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title:
+        ax.set_title(title, fontsize=10)
+
+    fig.tight_layout()
+    if save_path is not None:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_qualitative_panel(
+    image: np.ndarray,
+    leaf_mask: np.ndarray,
+    gt_mask: np.ndarray,
+    pred_mask: np.ndarray,
+    pred_probs: np.ndarray,
+    title: str | None = None,
+    save_path: str | Path | None = None,
+):
+    """
+    Five-panel qualitative figure for one sample: Image | Leaf region |
+    Ground truth lesions | Predicted lesions (binary) | Prediction
+    confidence (heatmap). Matches supervisor review request: show the leaf
+    segmentation, the lesion segmentation, and a confidence heatmap
+    side by side for the same sample.
+
+    Args:
+        image: (H, W, 3) uint8 RGB image.
+        leaf_mask: (H, W) binary mask of the SAM/YOLO-extracted leaf region.
+        gt_mask, pred_mask: (H, W) binary lesion masks.
+        pred_probs: (H, W) float array in [0, 1] -- raw sigmoid output
+            (same as plot_confidence_heatmap's `probs`), NOT the binarized
+            pred_mask.
+        title: optional figure-level title (e.g. sample_id + dice score).
+
+    Returns:
+        matplotlib.figure.Figure
+    """
+    fig, axes = plt.subplots(1, 5, figsize=(22, 4.2))
+
+    axes[0].imshow(image)
+    axes[0].set_title("Image", fontsize=11)
+
+    axes[1].imshow(overlay_mask(image, leaf_mask, color=(0, 150, 255)))
+    axes[1].set_title("Leaf region", fontsize=11)
+
+    axes[2].imshow(overlay_mask(image, gt_mask, color=(0, 200, 0)))
+    axes[2].set_title("Ground truth lesions", fontsize=11)
+
+    axes[3].imshow(overlay_mask(image, pred_mask, color=(220, 0, 0)))
+    axes[3].set_title("Predicted lesions", fontsize=11)
+
+    axes[4].imshow(image)
+    im = axes[4].imshow(pred_probs, cmap="inferno", alpha=0.6, vmin=0, vmax=1)
+    axes[4].set_title("Prediction confidence", fontsize=11)
+    fig.colorbar(im, ax=axes[4], fraction=0.046, pad=0.04)
+
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    if title:
+        fig.suptitle(title, fontsize=12, y=1.02)
+
+    fig.tight_layout()
+    if save_path is not None:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
 def plot_coverage_scatter(per_image_results: list[dict], save_path: str | Path | None = None):
     """
     Scatter of predicted vs reference leaf-area GLS coverage, one point per
