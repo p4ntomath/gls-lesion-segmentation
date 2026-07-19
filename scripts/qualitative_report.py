@@ -26,8 +26,36 @@ import albumentations as A
 
 from src.data.augmentations import get_eval_transforms
 from src.data.dataset import GLSDataset
-from src.evaluation.evaluate import load_experiment_config, build_model, _load_checkpoint
+from src.evaluation.evaluate import load_experiment_config, build_model, _load_checkpoint, build_test_loader
 from src.utils.viz import plot_qualitative_panel
+
+
+def run_inference_with_probs(model, loader, device):
+    """
+    Same computation as src.evaluation.evaluate.run_inference (batched
+    through the real DataLoader, identical batch composition/order to what
+    produced the official results.json numbers) -- but keeps the raw
+    per-pixel probability map for each sample instead of discarding it
+    after thresholding. That raw map is what plot_qualitative_panel's
+    confidence heatmap needs.
+
+    Deliberately does NOT re-run each sample individually (e.g. batch of 1)
+    -- some checkpoints (particularly ones from unstable training runs)
+    can produce meaningfully different output for a lone image vs a full
+    batch, even with eval() set and frozen BatchNorm stats. Matching
+    evaluate.py's exact batching is what guarantees this script's numbers
+    can never silently diverge from the official evaluation.
+    """
+    model.eval()
+    probs_by_id: dict[str, np.ndarray] = {}
+    with torch.no_grad():
+        for sample_ids, images, _masks in loader:
+            images = images.to(device)
+            logits = model(images)
+            probs = torch.sigmoid(logits)
+            for idx, sample_id in enumerate(sample_ids):
+                probs_by_id[sample_id] = probs[idx, 0].cpu().numpy()
+    return probs_by_id
 
 
 def select_samples(per_image: list[dict], n_per_category: int) -> dict[str, list[dict]]:
@@ -86,7 +114,13 @@ def main(experiment: str, n_per_category: int = 2, out_dir: str = "outputs/figur
     masks_dir = Path(config["paths"]["lesion_masks_dir"])
     leaf_masks_dir = Path(config["paths"]["leaf_masks_dir"])
 
-    model_transform = get_eval_transforms(image_size)
+    # Compute probabilities for the WHOLE test set in one batched pass,
+    # identical batching to evaluate.py -- guarantees these numbers match
+    # results.json exactly, rather than risking single-image inference
+    # producing different output for a fragile/unstable checkpoint.
+    test_loader = build_test_loader(config)
+    probs_by_id = run_inference_with_probs(model, test_loader, device)
+
     display_resize = A.Compose([A.Resize(image_size, image_size)])
 
     out_dir_path = Path(out_dir) / experiment
@@ -117,10 +151,10 @@ def main(experiment: str, n_per_category: int = 2, out_dir: str = "outputs/figur
             raw_leaf_mask = np.zeros(raw_image.shape[:2], dtype=np.uint8)
             print(f"  WARNING: no leaf mask for {sample_id}, showing blank leaf panel")
 
-        model_input = model_transform(image=raw_image, mask=raw_gt_mask)["image"].unsqueeze(0).to(device)
-        with torch.no_grad():
-            logits = model(model_input)
-            probs = torch.sigmoid(logits)[0, 0].cpu().numpy()
+        if sample_id not in probs_by_id:
+            print(f"  WARNING: {sample_id} not found in test loader output, skipping")
+            continue
+        probs = probs_by_id[sample_id]
         pred_mask = (probs >= threshold).astype(np.uint8)
 
         display = display_resize(image=raw_image, mask=raw_gt_mask)
