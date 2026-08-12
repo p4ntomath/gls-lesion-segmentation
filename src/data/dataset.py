@@ -23,6 +23,8 @@ class GLSDataset(torch.utils.data.Dataset):
         image_size: int,
         transform=None,
         return_id: bool = False,
+        leaf_masks_dir: str | Path | None = None,
+        return_leaf: bool = False,
     ) -> None:
         self.split_txt = Path(split_txt)
         self.images_dir = Path(images_dir)
@@ -30,6 +32,8 @@ class GLSDataset(torch.utils.data.Dataset):
         self.image_size = int(image_size)
         self.transform = transform
         self.return_id = return_id
+        self.leaf_masks_dir = Path(leaf_masks_dir) if leaf_masks_dir is not None else None
+        self.return_leaf = bool(return_leaf)
 
         if not self.split_txt.exists():
             raise FileNotFoundError(f"Split file not found: {self.split_txt}")
@@ -65,6 +69,20 @@ class GLSDataset(torch.utils.data.Dataset):
         image = self._load_rgb(image_path)
         mask = self._load_mask(mask_path)
 
+        leaf_mask = None
+        if self.return_leaf:
+            if self.leaf_masks_dir is None:
+                # requested to return a leaf mask but no directory configured
+                raise ValueError("return_leaf=True but no leaf_masks_dir provided to GLSDataset")
+            leaf_path = self.leaf_masks_dir / f"{sample_id}.png"
+            if leaf_path.exists():
+                leaf = Image.open(leaf_path).convert("L")
+                leaf_arr = (np.array(leaf, dtype=np.uint8) > 0).astype(np.uint8)
+            else:
+                # Missing leaf mask -> return all-zero mask (caller may decide strictness)
+                leaf_arr = np.zeros(image.shape[:2], dtype=np.uint8)
+            leaf_mask = leaf_arr
+
         if self.transform is not None:
             augmented = self.transform(image=image, mask=mask)
             image = augmented["image"]
@@ -91,7 +109,11 @@ class GLSDataset(torch.utils.data.Dataset):
         if mask.max() > 1.0:
             mask = (mask > 0).float()
 
+        if self.return_id and self.return_leaf:
+            return sample_id, image, mask, leaf_mask
         if self.return_id:
             return sample_id, image, mask
+        if self.return_leaf:
+            return image, mask, leaf_mask
         return image, mask
 

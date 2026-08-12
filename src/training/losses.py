@@ -78,14 +78,50 @@ class BCEDiceLoss(nn.Module):
         self.dice_eps = dice_eps
         self.bce = nn.BCEWithLogitsLoss()
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor, leaf_mask: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             logits: (B, 1, H, W) raw model output, NOT passed through sigmoid.
             target: (B, 1, H, W) binary ground truth, values in {0, 1},
                 same dtype as logits (float).
         """
-        bce_loss = self.bce(logits, target)
         probs = torch.sigmoid(logits)
-        d_loss = dice_loss(probs, target, eps=self.dice_eps)
+
+        if leaf_mask is None:
+            # Default behaviour: whole-image loss as before
+            bce_loss = self.bce(logits, target)
+            d_loss = dice_loss(probs, target, eps=self.dice_eps)
+            return self.bce_weight * bce_loss + (1.0 - self.bce_weight) * d_loss
+
+        # Ensure leaf_mask has shape (B, 1, H, W)
+        if leaf_mask.dim() == 3:
+            leaf = leaf_mask.unsqueeze(1)
+        else:
+            leaf = leaf_mask
+        leaf = leaf.to(dtype=target.dtype, device=logits.device)
+
+        # If no leaf pixels in a sample, fall back to whole-image for that
+        # sample by replacing its mask with all-ones to avoid division by zero.
+        per_sample_leaf_count = leaf.flatten(start_dim=1).sum(dim=1)  # (B,)
+        fallback = (per_sample_leaf_count == 0)
+        if fallback.any():
+            leaf = leaf.clone()
+            leaf[fallback, ...] = 1.0
+
+        # BCE: compute per-pixel and average only over leaf pixels per-sample,
+        # then average over batch.
+        bce_per_pixel = nn.functional.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        bce_per_sample = (bce_per_pixel * leaf).flatten(start_dim=1).sum(dim=1) / (leaf.flatten(start_dim=1).sum(dim=1))
+        bce_loss = bce_per_sample.mean()
+
+        # Dice: compute masked dice directly
+        pred_flat = (probs * leaf).flatten(start_dim=1)
+        target_flat = (target * leaf).flatten(start_dim=1)
+
+        intersection = (pred_flat * target_flat).sum(dim=1)
+        union = pred_flat.sum(dim=1) + target_flat.sum(dim=1)
+
+        dice_per_sample = (2.0 * intersection + self.dice_eps) / (union + self.dice_eps)
+        d_loss = 1.0 - dice_per_sample.mean()
+
         return self.bce_weight * bce_loss + (1.0 - self.bce_weight) * d_loss
