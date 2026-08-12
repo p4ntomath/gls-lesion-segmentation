@@ -91,6 +91,20 @@ class GLSDataset(torch.utils.data.Dataset):
             image = torch.from_numpy(image.transpose(2, 0, 1)).float().div(255.0)
             mask = torch.from_numpy(mask[None, ...]).float()
 
+        # If a leaf mask was requested, ensure it's resized/converted to the
+        # same spatial size and dtype as the returned `mask` so downstream
+        # training code can safely use it for per-pixel masking.
+        if leaf_mask is not None:
+            # leaf_mask currently is a numpy array at original resolution
+            # Resize using PIL nearest-neighbour to preserve binary values.
+            from PIL import Image
+
+            leaf_im = Image.fromarray((leaf_mask * 255).astype(np.uint8))
+            if leaf_im.size != (self.image_size, self.image_size):
+                leaf_im = leaf_im.resize((self.image_size, self.image_size), resample=Image.NEAREST)
+            leaf_arr = (np.array(leaf_im, dtype=np.uint8) > 0).astype(np.uint8)
+            leaf_mask = torch.from_numpy(leaf_arr[None, ...]).float()
+
         if isinstance(mask, np.ndarray):
             mask = torch.from_numpy(mask)
 
