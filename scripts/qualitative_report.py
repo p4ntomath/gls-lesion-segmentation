@@ -81,8 +81,13 @@ def select_samples(per_image: list[dict], n_per_category: int) -> dict[str, list
     nonzero = [r for r in with_coverage if r["reference_coverage"] > 0]
     by_coverage_asc_nonzero = sorted(nonzero, key=lambda r: r["reference_coverage"])
 
-    by_dice_desc = sorted(per_image, key=lambda r: r["dice"], reverse=True)
-    by_dice_asc = sorted(per_image, key=lambda r: r["dice"])
+    # Prefer leaf-masked dice when available (`dice_leaf_masked`), fall
+    # back to whole-image `dice` otherwise.
+    def _dice_key(r: dict) -> float:
+        return float(r.get("dice_leaf_masked", r.get("dice", 0.0)))
+
+    by_dice_desc = sorted(per_image, key=_dice_key, reverse=True)
+    by_dice_asc = sorted(per_image, key=_dice_key)
 
     return {
         "high_coverage": by_coverage_desc[:n_per_category],
@@ -161,21 +166,30 @@ def main(experiment: str, n_per_category: int = 2, out_dir: str = "outputs/figur
         display_image, display_gt = display["image"], display["mask"]
         display_leaf = display_resize(image=raw_image, mask=raw_leaf_mask)["mask"]
 
+        # Mask predictions and probabilities to the leaf area so visuals and
+        # the heatmap show leaf-only information.
+        pred_mask = (pred_mask.astype(np.uint8) & display_leaf.astype(np.uint8))
+        probs = (probs * display_leaf.astype(float))
+
         cov = row.get("reference_coverage")
         cov_str = f", coverage={cov:.2f}%" if cov is not None else ""
-        title = f"{sample_id}  [{', '.join(categories)}]  dice={row['dice']:.3f}{cov_str}"
+        dice_val = row.get("dice_leaf_masked", row.get("dice"))
+        title = f"{sample_id}  [{', '.join(categories)}]  dice={dice_val:.3f}{cov_str}"
 
         safe_categories = "-".join(categories)
         save_path = out_dir_path / f"{safe_categories}_{sample_id}.png"
         plot_qualitative_panel(display_image, display_leaf, display_gt, pred_mask, probs,
-                                title=title, save_path=save_path)
+                    title=title, save_path=save_path)
         print(f"  saved {save_path}")
 
     print(f"\nDone -- {len(sample_categories)} panels in {out_dir_path}")
     print("\nSelection summary:")
+    def _dice_str(r: dict) -> str:
+        return f"{r.get('dice_leaf_masked', r.get('dice', 0.0)):.3f}"
+
     for category, rows in selections.items():
         print(f"  {category}: " + ", ".join(
-            f"{r['sample_id']} (dice={r['dice']:.3f}"
+            f"{r['sample_id']} (dice={_dice_str(r)}"
             + (f", cov={r['reference_coverage']:.2f}%)" if "reference_coverage" in r else ")")
             for r in rows
         ))

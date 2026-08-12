@@ -56,13 +56,26 @@ class Trainer:
         total_samples = 0
 
         with create_progress_bar(total=len(self.train_loader), desc=f"Epoch {self.current_epoch}/{self.max_epochs} training", leave=False) as train_bar:
-            for batch_idx, (images, masks) in enumerate(self.train_loader, start=1):
+            for batch_idx, batch in enumerate(self.train_loader, start=1):
+                # support datasets that optionally return a leaf mask
+                if len(batch) == 2:
+                    images, masks = batch
+                    leaf = None
+                elif len(batch) == 3:
+                    images, masks, leaf = batch
+                else:
+                    raise ValueError("Unexpected batch structure from train_loader")
+
                 images = images.to(self.device)
                 masks = masks.to(self.device)
+                leaf = None if 'leaf' not in locals() or leaf is None else leaf.to(self.device)
+
+                if leaf is not None and leaf.dim() == 3:
+                    leaf = leaf.unsqueeze(1)
 
                 self.optimizer.zero_grad(set_to_none=True)
                 logits = self.model(images)
-                loss = self.criterion(logits, masks)
+                loss = self.criterion(logits, masks, leaf)
                 loss.backward()
                 self.optimizer.step()
 
@@ -72,7 +85,17 @@ class Trainer:
 
                 probs = torch.sigmoid(logits)
                 pred_binary = probs >= self.threshold
-                batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_binary, masks >= 0.5)
+
+                # If leaf mask available, compute metrics inside leaf area
+                if leaf is not None:
+                    leaf_bool = leaf >= 0.5
+                    pred_for_metrics = pred_binary & leaf_bool
+                    mask_for_metrics = (masks >= 0.5) & leaf_bool
+                else:
+                    pred_for_metrics = pred_binary
+                    mask_for_metrics = (masks >= 0.5)
+
+                batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_for_metrics, mask_for_metrics)
                 batch_dice = dice_coefficient(batch_tp, batch_fp, batch_fn)
                 batch_iou = iou_score(batch_tp, batch_fp, batch_fn)
 
@@ -97,16 +120,36 @@ class Trainer:
 
         with torch.no_grad():
             with create_progress_bar(total=len(self.val_loader), desc="Validating", leave=False) as val_bar:
-                for batch_idx, (images, masks) in enumerate(self.val_loader, start=1):
+                for batch_idx, batch in enumerate(self.val_loader, start=1):
+                    if len(batch) == 2:
+                        images, masks = batch
+                        leaf = None
+                    elif len(batch) == 3:
+                        images, masks, leaf = batch
+                    else:
+                        raise ValueError("Unexpected batch structure from val_loader")
+
                     images = images.to(self.device)
                     masks = masks.to(self.device)
+                    leaf = None if 'leaf' not in locals() or leaf is None else leaf.to(self.device)
+                    if leaf is not None and leaf.dim() == 3:
+                        leaf = leaf.unsqueeze(1)
 
                     logits = self.model(images)
-                    loss = self.criterion(logits, masks)
+                    loss = self.criterion(logits, masks, leaf)
 
                     probs = torch.sigmoid(logits)
                     pred_binary = probs >= self.threshold
-                    batch_tp, batch_fp, batch_fn, batch_tn = confusion_counts(pred_binary, masks >= 0.5)
+
+                    if leaf is not None:
+                        leaf_bool = leaf >= 0.5
+                        pred_for_metrics = pred_binary & leaf_bool
+                        mask_for_metrics = (masks >= 0.5) & leaf_bool
+                    else:
+                        pred_for_metrics = pred_binary
+                        mask_for_metrics = (masks >= 0.5)
+
+                    batch_tp, batch_fp, batch_fn, batch_tn = confusion_counts(pred_for_metrics, mask_for_metrics)
 
                     tp += batch_tp
                     fp += batch_fp

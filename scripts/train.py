@@ -75,6 +75,7 @@ def build_loaders(config: dict):
     split_dir = Path(paths["split_dir"])
     processed_images_dir = Path(paths["processed_images_dir"])
     lesion_masks_dir = Path(paths["lesion_masks_dir"])
+    leaf_masks_dir = Path(paths.get("leaf_masks_dir")) if paths.get("leaf_masks_dir") is not None else None
     image_size = int(data_cfg.get("image_size", 256))
     batch_size = int(training_cfg.get("batch_size", 8))
     num_workers = int(training_cfg.get("num_workers", 0))
@@ -82,8 +83,25 @@ def build_loaders(config: dict):
     train_transform = get_train_transforms(image_size) if training_cfg.get("augmentation", False) else get_eval_transforms(image_size)
     eval_transform = get_eval_transforms(image_size)
 
-    train_dataset = GLSDataset(split_dir / "train.txt", processed_images_dir, lesion_masks_dir, image_size, transform=train_transform)
-    val_dataset = GLSDataset(split_dir / "val.txt", processed_images_dir, lesion_masks_dir, image_size, transform=eval_transform)
+    use_leaf = bool(training_cfg.get("use_leaf_masking", False))
+    train_dataset = GLSDataset(
+        split_dir / "train.txt",
+        processed_images_dir,
+        lesion_masks_dir,
+        image_size,
+        transform=train_transform,
+        leaf_masks_dir=leaf_masks_dir,
+        return_leaf=use_leaf,
+    )
+    val_dataset = GLSDataset(
+        split_dir / "val.txt",
+        processed_images_dir,
+        lesion_masks_dir,
+        image_size,
+        transform=eval_transform,
+        leaf_masks_dir=leaf_masks_dir,
+        return_leaf=use_leaf,
+    )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)

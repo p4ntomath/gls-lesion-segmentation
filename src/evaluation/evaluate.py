@@ -181,6 +181,63 @@ def compute_segmentation_metrics(predictions: dict[str, np.ndarray], ground_trut
     }, per_image
 
 
+def compute_segmentation_metrics_masked(
+    predictions: dict[str, np.ndarray],
+    ground_truth: dict[str, np.ndarray],
+    leaf_masks: dict[str, np.ndarray],
+) -> tuple[dict, list[dict]]:
+    """
+    Compute segmentation metrics restricted to the leaf area for samples
+    that have a leaf mask. Returns (summary, per_image_masked). Samples
+    without a leaf mask are ignored by this masked summary.
+    """
+    available = sorted(set(ground_truth) & set(leaf_masks))
+    if not available:
+        raise ValueError("No overlapping samples between ground_truth and leaf_masks for masked metrics")
+
+    summary_counts = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
+    per_image = []
+
+    for sample_id in available:
+        pred = predictions[sample_id]
+        gt = ground_truth[sample_id]
+        leaf = leaf_masks[sample_id]
+
+        if leaf.shape != pred.shape:
+            raise ValueError(f"leaf mask shape {leaf.shape} doesn't match prediction shape {pred.shape} for {sample_id}")
+
+        pred_masked = (pred.astype(bool) & (leaf.astype(bool))).astype(np.uint8)
+        gt_masked = (gt.astype(bool) & (leaf.astype(bool))).astype(np.uint8)
+
+        metrics = segmentation_metrics(pred_masked, gt_masked)
+
+        summary_counts["tp"] += metrics["tp"]
+        summary_counts["fp"] += metrics["fp"]
+        summary_counts["fn"] += metrics["fn"]
+        summary_counts["tn"] += metrics["tn"]
+
+        per_image.append(
+            {
+                "sample_id": sample_id,
+                "dice": metrics["dice"],
+                "iou": metrics["iou"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+            }
+        )
+
+    return {
+        "dice": dice_coefficient(summary_counts["tp"], summary_counts["fp"], summary_counts["fn"]),
+        "iou": iou_score(summary_counts["tp"], summary_counts["fp"], summary_counts["fn"]),
+        "precision": precision_score(summary_counts["tp"], summary_counts["fp"]),
+        "recall": recall_score(summary_counts["tp"], summary_counts["fn"]),
+        "tp": summary_counts["tp"],
+        "fp": summary_counts["fp"],
+        "fn": summary_counts["fn"],
+        "tn": summary_counts["tn"],
+    }, per_image
+
+
 def compute_coverage_metrics(pred_coverage: np.ndarray, ref_coverage: np.ndarray) -> dict:
     pred = np.asarray(pred_coverage, dtype=float)
     ref = np.asarray(ref_coverage, dtype=float)
@@ -271,6 +328,27 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
                 row["predicted_coverage"] = cov["predicted_coverage"]
                 row["reference_coverage"] = cov["reference_coverage"]
 
+        # Also compute segmentation metrics restricted to leaf area for the
+        # samples that have a leaf mask, and attach per-image masked metrics
+        # to the per-image rows so downstream scripts can prefer them.
+        try:
+            masked_summary, masked_per_image = compute_segmentation_metrics_masked(
+                predictions, ground_truth, leaf_masks
+            )
+            masked_index = {row["sample_id"]: row for row in masked_per_image}
+            for row in combined_per_image:
+                mid = masked_index.get(row["sample_id"])
+                if mid is not None:
+                    row["dice_leaf_masked"] = mid["dice"]
+                    row["iou_leaf_masked"] = mid["iou"]
+                    row["precision_leaf_masked"] = mid["precision"]
+                    row["recall_leaf_masked"] = mid["recall"]
+        except ValueError:
+            # No overlapping ids; should not normally happen because we
+            # iterated over sorted(ground_truth) when loading masks, but
+            # be defensive.
+            masked_summary = {}
+
     if missing_leaf_ids:
         if leaf_masks:
             print(
@@ -292,6 +370,7 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
         "experiment": experiment,
         "summary": {
             **segmentation_summary,
+            "segmentation_masked_by_leaf": masked_summary if leaf_masks else "skipped -- no leaf masks available yet",
             "coverage": coverage_summary if coverage_summary else "skipped -- no leaf masks available yet",
             "num_samples": len(ground_truth),
             "num_samples_with_leaf_mask": len(leaf_masks),
