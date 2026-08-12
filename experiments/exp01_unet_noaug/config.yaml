@@ -5,3 +5,5 @@ extends: ["configs/base.yaml", "configs/unet.yaml"]
 overrides:
   training:
     augmentation: false
+    use_leaf_masking: true
+    early_stopping_patience: 999999
