@@ -83,7 +83,7 @@ def build_loaders(config: dict):
     train_transform = get_train_transforms(image_size) if training_cfg.get("augmentation", False) else get_eval_transforms(image_size)
     eval_transform = get_eval_transforms(image_size)
 
-    use_leaf = bool(training_cfg.get("use_leaf_masking", False))
+    apply_leaf_masking = bool(training_cfg.get("use_leaf_masking", False))
     train_dataset = GLSDataset(
         split_dir / "train.txt",
         processed_images_dir,
@@ -91,7 +91,8 @@ def build_loaders(config: dict):
         image_size,
         transform=train_transform,
         leaf_masks_dir=leaf_masks_dir,
-        return_leaf=use_leaf,
+        return_leaf=False,
+        apply_leaf_masking=apply_leaf_masking,
     )
     val_dataset = GLSDataset(
         split_dir / "val.txt",
@@ -100,7 +101,8 @@ def build_loaders(config: dict):
         image_size,
         transform=eval_transform,
         leaf_masks_dir=leaf_masks_dir,
-        return_leaf=use_leaf,
+        return_leaf=False,
+        apply_leaf_masking=apply_leaf_masking,
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)

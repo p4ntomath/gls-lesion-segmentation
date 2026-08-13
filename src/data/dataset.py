@@ -25,6 +25,7 @@ class GLSDataset(torch.utils.data.Dataset):
         return_id: bool = False,
         leaf_masks_dir: str | Path | None = None,
         return_leaf: bool = False,
+        apply_leaf_masking: bool = False,
     ) -> None:
         self.split_txt = Path(split_txt)
         self.images_dir = Path(images_dir)
@@ -34,6 +35,7 @@ class GLSDataset(torch.utils.data.Dataset):
         self.return_id = return_id
         self.leaf_masks_dir = Path(leaf_masks_dir) if leaf_masks_dir is not None else None
         self.return_leaf = bool(return_leaf)
+        self.apply_leaf_masking = bool(apply_leaf_masking)
 
         if not self.split_txt.exists():
             raise FileNotFoundError(f"Split file not found: {self.split_txt}")
@@ -70,40 +72,29 @@ class GLSDataset(torch.utils.data.Dataset):
         mask = self._load_mask(mask_path)
 
         leaf_mask = None
-        if self.return_leaf:
-            if self.leaf_masks_dir is None:
-                # requested to return a leaf mask but no directory configured
-                raise ValueError("return_leaf=True but no leaf_masks_dir provided to GLSDataset")
+        if self.leaf_masks_dir is not None:
             leaf_path = self.leaf_masks_dir / f"{sample_id}.png"
             if leaf_path.exists():
                 leaf = Image.open(leaf_path).convert("L")
-                leaf_arr = (np.array(leaf, dtype=np.uint8) > 0).astype(np.uint8)
+                leaf_mask = (np.array(leaf, dtype=np.uint8) > 0).astype(np.uint8)
             else:
-                # Missing leaf mask -> return all-zero mask (caller may decide strictness)
-                leaf_arr = np.zeros(image.shape[:2], dtype=np.uint8)
-            leaf_mask = leaf_arr
+                leaf_mask = np.zeros(image.shape[:2], dtype=np.uint8)
 
         if self.transform is not None:
-            augmented = self.transform(image=image, mask=mask)
-            image = augmented["image"]
-            mask = augmented["mask"]
+            if leaf_mask is not None:
+                augmented = self.transform(image=image, mask=mask, additional_targets={"leaf": leaf_mask})
+                image = augmented["image"]
+                mask = augmented["mask"]
+                leaf_mask = augmented.get("leaf")
+            else:
+                augmented = self.transform(image=image, mask=mask)
+                image = augmented["image"]
+                mask = augmented["mask"]
         else:
             image = torch.from_numpy(image.transpose(2, 0, 1)).float().div(255.0)
             mask = torch.from_numpy(mask[None, ...]).float()
-
-        # If a leaf mask was requested, ensure it's resized/converted to the
-        # same spatial size and dtype as the returned `mask` so downstream
-        # training code can safely use it for per-pixel masking.
-        if leaf_mask is not None:
-            # leaf_mask currently is a numpy array at original resolution
-            # Resize using PIL nearest-neighbour to preserve binary values.
-            from PIL import Image
-
-            leaf_im = Image.fromarray((leaf_mask * 255).astype(np.uint8))
-            if leaf_im.size != (self.image_size, self.image_size):
-                leaf_im = leaf_im.resize((self.image_size, self.image_size), resample=Image.NEAREST)
-            leaf_arr = (np.array(leaf_im, dtype=np.uint8) > 0).astype(np.uint8)
-            leaf_mask = torch.from_numpy(leaf_arr[None, ...]).float()
+            if leaf_mask is not None:
+                leaf_mask = torch.from_numpy(leaf_mask[None, ...]).float()
 
         if isinstance(mask, np.ndarray):
             mask = torch.from_numpy(mask)
@@ -122,6 +113,19 @@ class GLSDataset(torch.utils.data.Dataset):
         mask = mask.float()
         if mask.max() > 1.0:
             mask = (mask > 0).float()
+
+        if leaf_mask is not None:
+            if isinstance(leaf_mask, np.ndarray):
+                leaf_mask = torch.from_numpy(leaf_mask)
+            if leaf_mask.dim() == 2:
+                leaf_mask = leaf_mask.unsqueeze(0)
+            leaf_mask = leaf_mask.float()
+            if leaf_mask.max() > 1.0:
+                leaf_mask = (leaf_mask > 0).float()
+
+            if self.apply_leaf_masking:
+                image = image * leaf_mask
+                mask = mask * leaf_mask
 
         if self.return_id and self.return_leaf:
             return sample_id, image, mask, leaf_mask

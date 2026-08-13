@@ -16,7 +16,7 @@ paths:
 
 data:
   label_statuses: ["LABELED", "REVIEWED"]   # proposal §4.1.1: exclude samples with no ground truth
-  image_size: 256                            # §4.2.5 debug size for faster iteration
+  image_size: 512                            # higher-resolution leaf-aware training
   seed: 42
   split_ratios: [0.70, 0.15, 0.15]           # §4.2.3
   stratify_bins: 3                           # low / medium / high coverage bins

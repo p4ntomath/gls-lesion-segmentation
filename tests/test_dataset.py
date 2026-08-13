@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from PIL import Image
 
 from src.data.augmentations import get_eval_transforms
@@ -102,6 +103,54 @@ def test_dataset_getitem_shapes(tmp_path: Path) -> None:
     assert mask.dtype == pytest.approx(mask.dtype)
     assert image.max() <= 1.0
     assert set(np.unique(mask.numpy())).issubset({0.0, 1.0})
+
+
+def test_dataset_applies_leaf_mask_to_input_and_target(tmp_path: Path) -> None:
+    image_dir = tmp_path / "images"
+    mask_dir = tmp_path / "masks"
+    leaf_dir = tmp_path / "leaf_masks"
+    split_dir = tmp_path / "splits"
+    image_dir.mkdir(parents=True)
+    mask_dir.mkdir(parents=True)
+    leaf_dir.mkdir(parents=True)
+    split_dir.mkdir(parents=True)
+
+    sample_id = "0001"
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+    image[1:3, 1:3, :] = 200
+    Image.fromarray(image).save(image_dir / f"{sample_id}.jpg")
+
+    lesion = np.zeros((4, 4), dtype=np.uint8)
+    lesion[3, 3] = 255
+    Image.fromarray(lesion, mode="L").save(mask_dir / f"{sample_id}.png")
+
+    leaf = np.zeros((4, 4), dtype=np.uint8)
+    leaf[0:3, 0:3] = 255
+    Image.fromarray(leaf, mode="L").save(leaf_dir / f"{sample_id}.png")
+
+    (split_dir / "train.txt").write_text(f"{sample_id}\n", encoding="utf-8")
+
+    dataset = GLSDataset(
+        split_dir / "train.txt",
+        image_dir,
+        mask_dir,
+        image_size=4,
+        transform=None,
+        leaf_masks_dir=leaf_dir,
+        apply_leaf_masking=True,
+        return_leaf=True,
+    )
+
+    image_tensor, mask_tensor, leaf_tensor = dataset[0]
+
+    assert image_tensor.shape == (3, 4, 4)
+    assert mask_tensor.shape == (1, 4, 4)
+    assert leaf_tensor.shape == (1, 4, 4)
+    assert torch.equal(image_tensor[:, 3, 3], torch.zeros(3))
+    assert torch.equal(mask_tensor[:, 3, 3], torch.zeros(1))
+    assert image_tensor[:, 1, 2].max() > 0
+    assert mask_tensor[:, 3, 3].item() == 0.0
+    assert leaf_tensor[:, 1, 2].item() == 1.0
 
 
 def test_process_manifest_rows_supports_parallel_workers() -> None:
