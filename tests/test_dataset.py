@@ -170,6 +170,25 @@ def test_process_manifest_rows_supports_parallel_workers() -> None:
     assert all(item["processed"] == "ok" for item in results)
 
 
+def test_process_manifest_rows_parallel_skips_failed_rows() -> None:
+    manifest = pd.DataFrame(
+        {
+            "sample_id": ["001", "bad", "003"],
+            "annotations": ["[]", "[]", "[]"],
+        }
+    )
+
+    def row_processor(row: pd.Series) -> dict[str, str]:
+        if str(row.sample_id) == "bad":
+            raise RuntimeError("simulated download error")
+        return {"sample_id": str(row.sample_id), "processed": "ok"}
+
+    results = process_manifest_rows(manifest, row_processor=row_processor, workers=2)
+
+    sample_ids = {item["sample_id"] for item in results}
+    assert sample_ids == {"001", "003"}
+
+
 def test_split_ratios_approximately_correct() -> None:
     manifest = pd.DataFrame(
         {

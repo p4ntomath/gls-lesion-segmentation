@@ -8,7 +8,8 @@ Writes:  data/processed/images/<id>.jpg, data/processed/lesion_masks/<id>.png
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Any
 
@@ -22,19 +23,46 @@ from tqdm import tqdm
 from src.utils.progress import ProgressTracker, create_progress_bar
 
 
-def download_file(url: str, dest_path: str) -> None:
-    """Download a file if it is not already present."""
+def download_file(
+    url: str,
+    dest_path: str,
+    *,
+    timeout: int = 60,
+    max_retries: int = 5,
+    backoff_seconds: float = 1.5,
+) -> None:
+    """Download a file if it is not already present.
+
+    Retries transient network failures (for example remote disconnects in
+    Colab) with exponential backoff before surfacing the final error.
+    """
     dest = Path(dest_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 0:
         return
 
-    with requests.get(url, stream=True, timeout=60) as response:
-        response.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
+    tmp_dest = dest.with_suffix(dest.suffix + ".part")
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            with requests.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
+                with open(tmp_dest, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            tmp_dest.replace(dest)
+            return
+        except (requests.RequestException, OSError) as exc:
+            if tmp_dest.exists():
+                tmp_dest.unlink(missing_ok=True)
+
+            if attempt >= max_retries:
+                raise RuntimeError(
+                    f"Failed to download after {max_retries} attempts: {url}"
+                ) from exc
+
+            time.sleep(backoff_seconds * (2 ** (attempt - 1)))
 
 
 def load_instance_bitmap(path: str) -> np.ndarray:
@@ -125,15 +153,18 @@ def process_manifest_rows(
         return results
 
     rows = [row for _, row in manifest.iterrows()]
+    tracker = ProgressTracker()
+    results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        results = list(
-            tqdm(
-                executor.map(row_processor, rows),
-                total=len(rows),
-                desc="Generating masks",
-                dynamic_ncols=True,
-            )
-        )
+        futures = [executor.submit(row_processor, row) for row in rows]
+        with create_progress_bar(total=len(futures), desc="Generating masks") as bar:
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception:
+                    tracker.update(bar, failed=tracker.failed + 1)
+                    continue
+                tracker.update(bar)
     return results
 
 
@@ -189,9 +220,22 @@ def main(config_path: str = "configs/base.yaml") -> None:
         workers=workers,
     )
 
-    manifest["lesion_coverage"] = [item["lesion_coverage"] for item in results]
+    coverage_by_id = {str(item["sample_id"]): float(item["lesion_coverage"]) for item in results}
+    manifest["lesion_coverage"] = manifest["sample_id"].astype(str).map(coverage_by_id)
+
+    failed_ids = manifest.loc[manifest["lesion_coverage"].isna(), "sample_id"].astype(str).tolist()
+
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(manifest_path, index=False)
+
+    if failed_ids:
+        preview = ", ".join(failed_ids[:10])
+        suffix = "" if len(failed_ids) <= 10 else ", ..."
+        raise RuntimeError(
+            "Mask generation completed with failures for "
+            f"{len(failed_ids)} sample(s): {preview}{suffix}. "
+            "Re-run preprocess; completed samples are cached and will be skipped."
+        )
 
 
 if __name__ == "__main__":
