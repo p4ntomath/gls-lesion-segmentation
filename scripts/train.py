@@ -80,10 +80,9 @@ def build_loaders(config: dict):
     batch_size = int(training_cfg.get("batch_size", 8))
     num_workers = int(training_cfg.get("num_workers", 0))
 
-    train_transform = get_train_transforms(image_size) if training_cfg.get("augmentation", False) else get_eval_transforms(image_size)
-    eval_transform = get_eval_transforms(image_size)
-
     apply_leaf_masking = bool(training_cfg.get("use_leaf_masking", False))
+    train_transform = get_train_transforms(image_size, with_leaf=apply_leaf_masking) if training_cfg.get("augmentation", False) else get_eval_transforms(image_size, with_leaf=apply_leaf_masking)
+    eval_transform = get_eval_transforms(image_size, with_leaf=apply_leaf_masking)
     train_dataset = GLSDataset(
         split_dir / "train.txt",
         processed_images_dir,

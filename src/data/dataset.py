@@ -82,10 +82,10 @@ class GLSDataset(torch.utils.data.Dataset):
 
         if self.transform is not None:
             if leaf_mask is not None:
-                augmented = self.transform(image=image, mask=mask, additional_targets={"leaf": leaf_mask})
+                augmented = self.transform(image=image, mask=mask, leaf=leaf_mask)
                 image = augmented["image"]
                 mask = augmented["mask"]
-                leaf_mask = augmented.get("leaf")
+                leaf_mask = augmented["leaf"]
             else:
                 augmented = self.transform(image=image, mask=mask)
                 image = augmented["image"]
@@ -134,4 +134,3 @@ class GLSDataset(torch.utils.data.Dataset):
         if self.return_leaf:
             return image, mask, leaf_mask
         return image, mask
-
