@@ -59,13 +59,18 @@ class Trainer:
             for batch_idx, batch in enumerate(self.train_loader, start=1):
                 if len(batch) == 2:
                     images, masks = batch
+                    leaf = None
                 elif len(batch) == 3:
-                    images, masks, _ = batch
+                    images, masks, leaf = batch
                 else:
                     raise ValueError("Unexpected batch structure from train_loader")
 
                 images = images.to(self.device)
                 masks = masks.to(self.device)
+                if leaf is not None:
+                    leaf = leaf.to(self.device)
+                    if leaf.dim() == 3:
+                        leaf = leaf.unsqueeze(1)
 
                 self.optimizer.zero_grad(set_to_none=True)
                 logits = self.model(images)
@@ -79,7 +84,12 @@ class Trainer:
 
                 probs = torch.sigmoid(logits)
                 pred_binary = probs >= self.threshold
-                batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_binary, masks >= 0.5)
+                if leaf is not None:
+                    pred_binary = pred_binary & (leaf >= 0.5)
+                    masks_for_metrics = (masks >= 0.5) & (leaf >= 0.5)
+                else:
+                    masks_for_metrics = masks >= 0.5
+                batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_binary, masks_for_metrics)
                 batch_dice = dice_coefficient(batch_tp, batch_fp, batch_fn)
                 batch_iou = iou_score(batch_tp, batch_fp, batch_fn)
 
@@ -107,20 +117,30 @@ class Trainer:
                 for batch_idx, batch in enumerate(self.val_loader, start=1):
                     if len(batch) == 2:
                         images, masks = batch
+                        leaf = None
                     elif len(batch) == 3:
-                        images, masks, _ = batch
+                        images, masks, leaf = batch
                     else:
                         raise ValueError("Unexpected batch structure from val_loader")
 
                     images = images.to(self.device)
                     masks = masks.to(self.device)
+                    if leaf is not None:
+                        leaf = leaf.to(self.device)
+                        if leaf.dim() == 3:
+                            leaf = leaf.unsqueeze(1)
 
                     logits = self.model(images)
                     loss = self.criterion(logits, masks)
 
                     probs = torch.sigmoid(logits)
                     pred_binary = probs >= self.threshold
-                    batch_tp, batch_fp, batch_fn, batch_tn = confusion_counts(pred_binary, masks >= 0.5)
+                    if leaf is not None:
+                        pred_binary = pred_binary & (leaf >= 0.5)
+                        masks_for_metrics = (masks >= 0.5) & (leaf >= 0.5)
+                    else:
+                        masks_for_metrics = masks >= 0.5
+                    batch_tp, batch_fp, batch_fn, batch_tn = confusion_counts(pred_binary, masks_for_metrics)
 
                     tp += batch_tp
                     fp += batch_fp

@@ -2,3 +2,4 @@ extends: ["configs/base.yaml", "configs/unet.yaml"]
 overrides:
   training:
     augmentation: true
+    use_leaf_masking: true

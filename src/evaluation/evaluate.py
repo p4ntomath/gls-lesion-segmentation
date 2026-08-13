@@ -99,6 +99,7 @@ def build_test_loader(config: dict) -> DataLoader:
     split_dir = Path(paths["split_dir"])
     processed_images_dir = Path(paths["processed_images_dir"])
     lesion_masks_dir = Path(paths["lesion_masks_dir"])
+    leaf_masks_dir = Path(paths["leaf_masks_dir"]) if paths.get("leaf_masks_dir") is not None else None
     image_size = int(data_cfg.get("image_size", 256))
     batch_size = int(training_cfg.get("batch_size", 8))
     num_workers = int(training_cfg.get("num_workers", 0))
@@ -111,6 +112,9 @@ def build_test_loader(config: dict) -> DataLoader:
         image_size,
         transform=test_transform,
         return_id=True,
+        leaf_masks_dir=leaf_masks_dir,
+        return_leaf=bool(training_cfg.get("use_leaf_masking", False)),
+        apply_leaf_masking=bool(training_cfg.get("use_leaf_masking", False)),
     )
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
@@ -123,17 +127,33 @@ def run_inference(model: torch.nn.Module, loader: DataLoader, device: torch.devi
     with torch.no_grad():
         with create_progress_bar(total=len(loader), desc="Running inference") as bar:
             for batch_idx, batch in enumerate(loader, start=1):
-                sample_ids, images, masks = batch
+                if len(batch) == 3:
+                    sample_ids, images, masks = batch
+                    leaf = None
+                elif len(batch) == 4:
+                    sample_ids, images, masks, leaf = batch
+                else:
+                    raise ValueError(f"Unexpected batch structure from test_loader: {len(batch)}")
+
                 images = images.to(device)
                 masks = masks.to(device)
+                if leaf is not None:
+                    leaf = leaf.to(device)
+                    if leaf.dim() == 3:
+                        leaf = leaf.unsqueeze(1)
 
                 logits = model(images)
                 probs = torch.sigmoid(logits)
                 binary = binarize(probs)
+                if leaf is not None:
+                    binary = binary & (leaf.detach().cpu().numpy() >= 0.5)
 
                 for idx, sample_id in enumerate(sample_ids):
                     predictions[sample_id] = binary[idx, 0].astype(np.uint8)
-                    ground_truth[sample_id] = masks[idx, 0].detach().cpu().numpy().astype(np.uint8)
+                    gt_mask = masks[idx, 0].detach().cpu().numpy().astype(np.uint8)
+                    if leaf is not None:
+                        gt_mask = gt_mask & (leaf[idx, 0].detach().cpu().numpy() >= 0.5)
+                    ground_truth[sample_id] = gt_mask.astype(np.uint8)
 
                 bar.set_postfix(batch=batch_idx)
                 bar.update(1)

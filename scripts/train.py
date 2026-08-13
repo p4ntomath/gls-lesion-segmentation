@@ -91,7 +91,7 @@ def build_loaders(config: dict):
         image_size,
         transform=train_transform,
         leaf_masks_dir=leaf_masks_dir,
-        return_leaf=False,
+        return_leaf=apply_leaf_masking,
         apply_leaf_masking=apply_leaf_masking,
     )
     val_dataset = GLSDataset(
@@ -101,7 +101,7 @@ def build_loaders(config: dict):
         image_size,
         transform=eval_transform,
         leaf_masks_dir=leaf_masks_dir,
-        return_leaf=False,
+        return_leaf=apply_leaf_masking,
         apply_leaf_masking=apply_leaf_masking,
     )
 
