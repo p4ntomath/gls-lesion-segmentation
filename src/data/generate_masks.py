@@ -154,18 +154,19 @@ def process_manifest_rows(
 
     rows = [row for _, row in manifest.iterrows()]
     tracker = ProgressTracker()
-    results: list[dict[str, Any]] = []
+    ordered_results: list[dict[str, Any] | None] = [None] * len(rows)
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(row_processor, row) for row in rows]
-        with create_progress_bar(total=len(futures), desc="Generating masks") as bar:
-            for future in as_completed(futures):
+        future_to_index = {executor.submit(row_processor, row): i for i, row in enumerate(rows)}
+        with create_progress_bar(total=len(future_to_index), desc="Generating masks") as bar:
+            for future in as_completed(future_to_index):
+                row_index = future_to_index[future]
                 try:
-                    results.append(future.result())
+                    ordered_results[row_index] = future.result()
                 except Exception:
                     tracker.update(bar, failed=tracker.failed + 1)
                     continue
                 tracker.update(bar)
-    return results
+    return [result for result in ordered_results if result is not None]
 
 
 def _process_manifest_row(row: pd.Series) -> dict[str, Any]:

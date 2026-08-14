@@ -109,25 +109,49 @@ def build_loaders(config: dict):
     return train_loader, val_loader
 
 
-def main(experiment: str, max_epochs: int | None = None, patience: int | None = None) -> None:
+def main(
+    experiment: str,
+    max_epochs: int | None = None,
+    patience: int | None = None,
+    *,
+    resume: bool = False,
+    resume_from: str | None = None,
+    allow_resume_config_mismatch: bool = False,
+) -> None:
     config = load_experiment_config(experiment)
     set_seed(int(config["data"].get("seed", 42)))
 
     model = build_model(config)
     train_loader, val_loader = build_loaders(config)
+    trainer = Trainer(model, train_loader, val_loader, config)
+
+    start_epoch = 1
+    epochs_without_improvement = 0
+    should_resume = resume or (resume_from is not None)
+    if should_resume:
+        resume_state = trainer.resume_from_checkpoint(
+            checkpoint_path=resume_from,
+            strict_config=not allow_resume_config_mismatch,
+        )
+        start_epoch = int(resume_state["start_epoch"])
+        epochs_without_improvement = int(resume_state["epochs_without_improvement"])
+        source = resume_from if resume_from is not None else str(trainer.latest_checkpoint_path)
+        print(f"Resumed from checkpoint: {source}", flush=True)
+        print(f"  next epoch: {start_epoch}", flush=True)
 
     print(f"Starting training for experiment: {experiment}", flush=True)
-    print(f"  device: {Trainer(model, train_loader, val_loader, config).device}", flush=True)
+    print(f"  device: {trainer.device}", flush=True)
     print(f"  train samples: {len(train_loader.dataset)}", flush=True)
     print(f"  val samples: {len(val_loader.dataset)}", flush=True)
     print(f"  batch size: {train_loader.batch_size}", flush=True)
     print(f"  max_epochs: {max_epochs if max_epochs is not None else config['training'].get('max_epochs', 100)}", flush=True)
     print(f"  patience: {patience if patience is not None else config['training'].get('early_stopping_patience', 15)}", flush=True)
 
-    trainer = Trainer(model, train_loader, val_loader, config)
     trainer.fit(
         max_epochs=max_epochs if max_epochs is not None else config["training"].get("max_epochs", 100),
         patience=patience if patience is not None else config["training"].get("early_stopping_patience", 15),
+        start_epoch=start_epoch,
+        epochs_without_improvement=epochs_without_improvement,
     )
 
 
@@ -136,5 +160,19 @@ if __name__ == "__main__":
     parser.add_argument("--experiment", required=True, help="Experiment folder name under experiments/")
     parser.add_argument("--max-epochs", type=int, default=None, help="Override max epochs for this training run")
     parser.add_argument("--patience", type=int, default=None, help="Override early stopping patience for this training run")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint for this experiment")
+    parser.add_argument("--resume-from", default=None, help="Path to a specific checkpoint file to resume from")
+    parser.add_argument(
+        "--allow-resume-config-mismatch",
+        action="store_true",
+        help="Allow resume even if current config differs from checkpoint config",
+    )
     args = parser.parse_args()
-    main(args.experiment, max_epochs=args.max_epochs, patience=args.patience)
+    main(
+        args.experiment,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        resume=args.resume,
+        resume_from=args.resume_from,
+        allow_resume_config_mismatch=args.allow_resume_config_mismatch,
+    )
