@@ -195,9 +195,9 @@ class Trainer:
                     running_loss += float(loss.item()) * batch_size
                     total_samples += batch_size
 
-                    batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_binary, masks >= 0.5)
-                    batch_dice = dice_coefficient(batch_tp, batch_fp, batch_fn)
-                    batch_iou = iou_score(batch_tp, batch_fp, batch_fn)
+                    batch_tp_display, batch_fp_display, batch_fn_display, _ = confusion_counts(pred_binary, masks_for_metrics)
+                    batch_dice = dice_coefficient(batch_tp_display, batch_fp_display, batch_fn_display)
+                    batch_iou = iou_score(batch_tp_display, batch_fp_display, batch_fn_display)
 
                     val_bar.set_postfix(
                         loss=f"{loss.item():.4f}",
@@ -338,6 +338,8 @@ class Trainer:
             self.history.append(row)
             self._write_log()
 
+            self._save_checkpoint(self.latest_checkpoint_path, epoch, val_metrics, epochs_without_improvement)
+
             if val_metrics["dice"] > self.best_val_dice:
                 self.best_val_dice = val_metrics["dice"]
                 self.best_epoch = epoch
@@ -345,8 +347,6 @@ class Trainer:
                 self._save_checkpoint(self.best_checkpoint_path, epoch, val_metrics, epochs_without_improvement)
             else:
                 epochs_without_improvement += 1
-
-            self._save_checkpoint(self.latest_checkpoint_path, epoch, val_metrics, epochs_without_improvement)
 
             print(
                 f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | "

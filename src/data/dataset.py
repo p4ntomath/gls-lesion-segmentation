@@ -74,6 +74,11 @@ class GLSDataset(torch.utils.data.Dataset):
         leaf_mask = None
         if self.leaf_masks_dir is not None:
             leaf_path = self.leaf_masks_dir / f"{sample_id}.png"
+            if self.apply_leaf_masking and not leaf_path.exists():
+                raise FileNotFoundError(
+                    f"Leaf masking enabled but leaf mask not found for sample {sample_id} at {leaf_path}. "
+                    f"Either disable leaf masking in the config or generate all leaf masks before training."
+                )
             if leaf_path.exists():
                 leaf = Image.open(leaf_path).convert("L")
                 leaf_mask = (np.array(leaf, dtype=np.uint8) > 0).astype(np.uint8)
