@@ -103,8 +103,10 @@ def build_test_loader(config: dict) -> DataLoader:
     image_size = int(data_cfg.get("image_size", 256))
     batch_size = int(training_cfg.get("batch_size", 8))
     num_workers = int(training_cfg.get("num_workers", 0))
+    use_leaf_masking = bool(training_cfg.get("use_leaf_masking", False))
 
-    test_transform = get_eval_transforms(image_size)
+    # Include leaf mask in transform pipeline if leaf masking is enabled
+    test_transform = get_eval_transforms(image_size, with_leaf=use_leaf_masking)
     dataset = GLSDataset(
         split_dir / "test.txt",
         processed_images_dir,
@@ -113,8 +115,8 @@ def build_test_loader(config: dict) -> DataLoader:
         transform=test_transform,
         return_id=True,
         leaf_masks_dir=leaf_masks_dir,
-        return_leaf=bool(training_cfg.get("use_leaf_masking", False)),
-        apply_leaf_masking=bool(training_cfg.get("use_leaf_masking", False)),
+        return_leaf=use_leaf_masking,
+        apply_leaf_masking=use_leaf_masking,
     )
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
