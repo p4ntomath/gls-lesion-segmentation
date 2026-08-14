@@ -81,9 +81,6 @@ class GLSDataset(torch.utils.data.Dataset):
                 )
             if leaf_path.exists():
                 leaf = Image.open(leaf_path).convert("L")
-                # Resize leaf mask to match image size before augmentation
-                if leaf.size != (self.image_size, self.image_size):
-                    leaf = leaf.resize((self.image_size, self.image_size), resample=Image.NEAREST)
                 leaf_mask = (np.array(leaf, dtype=np.uint8) > 0).astype(np.uint8)
             else:
                 leaf_mask = np.zeros(image.shape[:2], dtype=np.uint8)
