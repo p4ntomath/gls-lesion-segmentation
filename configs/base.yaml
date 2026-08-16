@@ -27,7 +27,7 @@ processing:
 training:
   optimizer: "adam"
   learning_rate: 0.0001
-  batch_size: 8
+  batch_size: 4
   max_epochs: 100
   early_stopping_patience: 999999           # disabled: do not stop early unless explicitly configured
   loss: "bce_dice"
