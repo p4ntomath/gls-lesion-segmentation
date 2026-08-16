@@ -88,11 +88,24 @@ class Trainer:
 
         torch_state = state.get("torch")
         if torch_state is not None:
+            # Ensure torch_state is a ByteTensor on CPU (torch.set_rng_state requires ByteTensor)
+            if isinstance(torch_state, torch.Tensor):
+                torch_state = torch_state.cpu().to(dtype=torch.uint8)
+            else:
+                torch_state = torch.tensor(torch_state, dtype=torch.uint8, device="cpu")
             torch.set_rng_state(torch_state)
 
         cuda_state = state.get("torch_cuda")
         if cuda_state is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(cuda_state)
+            # Ensure each cuda state is a ByteTensor on the correct CUDA device
+            cuda_state_converted = []
+            for i, s in enumerate(cuda_state):
+                if isinstance(s, torch.Tensor):
+                    s = s.to(device=f"cuda:{i}", dtype=torch.uint8)
+                else:
+                    s = torch.tensor(s, dtype=torch.uint8, device=f"cuda:{i}")
+                cuda_state_converted.append(s)
+            torch.cuda.set_rng_state_all(cuda_state_converted)
 
     def train_epoch(self) -> float:
         self.model.train()
