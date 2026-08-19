@@ -49,7 +49,10 @@ def run_inference_with_probs(model, loader, device):
     model.eval()
     probs_by_id: dict[str, np.ndarray] = {}
     with torch.no_grad():
-        for sample_ids, images, _masks in loader:
+        for batch in loader:
+            if len(batch) < 3:
+                raise ValueError("Unexpected batch structure from test_loader")
+            sample_ids, images = batch[0], batch[1]
             images = images.to(device)
             logits = model(images)
             probs = torch.sigmoid(logits)
