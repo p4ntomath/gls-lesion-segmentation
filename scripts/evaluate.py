@@ -404,14 +404,15 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
         "per_image": combined_per_image,
     }
 
-    exp_dir = Path("experiments") / experiment
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    results_path = exp_dir / "results.json"
-    with results_path.open("w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+        results_dir = Path("outputs/results") / experiment
+        results_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Saved evaluation results to {results_path}")
+        results_path = results_dir / "results.json"
 
+        with results_path.open("w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
+
+        print(f"Saved evaluation results to {results_path}")
 
 if __name__ == "__main__":
     import argparse
