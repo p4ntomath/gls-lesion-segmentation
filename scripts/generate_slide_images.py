@@ -218,13 +218,16 @@ def gen_slide3_dataset_triplet(config, manifest):
     print(f"  saved {p.name}")
 
 
-def gen_slide4_masking(config, manifest):
+def gen_slide4_masking(config, manifest, sample_id: str | None = None):
     """Slide 4: Before vs after leaf masking + mask quality check."""
     imgs_dir  = Path(config["paths"]["processed_images_dir"])
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
     size = int(config["data"]["image_size"])
-    split_file = Path(config["paths"]["split_dir"]) / "test.txt"
-    sid = split_file.read_text().strip().splitlines()[0]
+    if sample_id:
+        sid = sample_id
+    else:
+        split_file = Path(config["paths"]["split_dir"]) / "test.txt"
+        sid = split_file.read_text().strip().splitlines()[0]
 
     img   = load_rgb(imgs_dir / f"{sid}.jpg", size)
     lmask = load_mask(leaf_dir / f"{sid}.png", size) if (leaf_dir / f"{sid}.png").exists() else np.ones((size, size), dtype=np.uint8)
@@ -491,7 +494,13 @@ def gen_slide11_coverage(preds, gts, config, manifest):
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 
-def main(experiment: str, old_ckpt_dir: str | None, new_ckpt_dir: str | None, n: int) -> None:
+def main(
+    experiment: str,
+    old_ckpt_dir: str | None,
+    new_ckpt_dir: str | None,
+    n: int,
+    slide4_sample_id: str | None = None,
+) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -557,7 +566,7 @@ def main(experiment: str, old_ckpt_dir: str | None, new_ckpt_dir: str | None, n:
     gen_slide3_dataset_triplet(config, manifest)
 
     print("Slide 4: before/after masking")
-    gen_slide4_masking(config, manifest)
+    gen_slide4_masking(config, manifest, sample_id=slide4_sample_id)
 
     print("Slide 5: U-Net diagram")
     gen_slide5_unet_diagram(manifest)
@@ -603,6 +612,8 @@ if __name__ == "__main__":
                         help="Directory of NEW (leaf-masked 512x512) .pt files — overrides config path if given")
     parser.add_argument("--n", type=int, default=4,
                         help="Number of samples in comparison grid (default: 4)")
+    parser.add_argument("--slide4-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 4 before/after leaf masking (default: first test sample)")
     args = parser.parse_args()
-    main(args.experiment, args.old_checkpoints_dir, args.new_checkpoints_dir, args.n)
+    main(args.experiment, args.old_checkpoints_dir, args.new_checkpoints_dir, args.n, args.slide4_sample_id)
 
