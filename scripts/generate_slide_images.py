@@ -367,10 +367,14 @@ def gen_slide7_baseline_grid(preds, probs, gts, config, manifest):
     print(f"  saved {p.name}")
 
 
-def gen_slide8_leafmasked_triple(preds, gts, config, manifest):
+def gen_slide8_leafmasked_triple(preds, gts, config, manifest, sample_id: str | None = None):
     """Slide 8: Leaf-masked input | prediction | ground truth."""
-    sample_ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=0)
-    sid = sample_ids[0] if sample_ids else list(preds.keys())[0]
+    if sample_id:
+        sid = sample_id
+    else:
+        sample_ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=0)
+        sid = sample_ids[0] if sample_ids else list(preds.keys())[0]
+
     imgs_dir  = Path(config["paths"]["processed_images_dir"])
     masks_dir = Path(config["paths"]["lesion_masks_dir"])
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
@@ -378,7 +382,7 @@ def gen_slide8_leafmasked_triple(preds, gts, config, manifest):
 
     img   = load_rgb(imgs_dir / f"{sid}.jpg", size)
     gt    = load_mask(masks_dir / f"{sid}.png", size)
-    pred  = preds[sid]
+    pred  = preds.get(sid, np.zeros((size, size), dtype=np.uint8))
     lmask = load_mask(leaf_dir / f"{sid}.png", size) if (leaf_dir / f"{sid}.png").exists() else np.ones((size, size), dtype=np.uint8)
     masked_img = img * lmask[:, :, None]
 
@@ -500,6 +504,7 @@ def main(
     new_ckpt_dir: str | None,
     n: int,
     slide4_sample_id: str | None = None,
+    slide8_sample_id: str | None = None,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
@@ -580,7 +585,7 @@ def main(
         gen_slide7_baseline_grid(new_preds, new_probs, new_gts, config, manifest)
 
         print("Slide 8: leaf-masked triple")
-        gen_slide8_leafmasked_triple(new_preds, new_gts, config, manifest)
+        gen_slide8_leafmasked_triple(new_preds, new_gts, config, manifest, sample_id=slide8_sample_id)
 
     if old_preds and new_preds:
         print("Slide 10: qualitative comparison old vs new")
@@ -614,6 +619,15 @@ if __name__ == "__main__":
                         help="Number of samples in comparison grid (default: 4)")
     parser.add_argument("--slide4-sample-id", default=None,
                         help="Specific sample ID to use for Slide 4 before/after leaf masking (default: first test sample)")
+    parser.add_argument("--slide8-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 8 leaf-masked triple (default: best test prediction)")
     args = parser.parse_args()
-    main(args.experiment, args.old_checkpoints_dir, args.new_checkpoints_dir, args.n, args.slide4_sample_id)
+    main(
+        args.experiment,
+        args.old_checkpoints_dir,
+        args.new_checkpoints_dir,
+        args.n,
+        args.slide4_sample_id,
+        args.slide8_sample_id,
+    )
 
