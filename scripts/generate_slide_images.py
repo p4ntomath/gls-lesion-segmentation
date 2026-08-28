@@ -129,54 +129,131 @@ def pick_samples(preds, gts, n_best=2, n_worst=2, n_high_cov=2):
     return list(dict.fromkeys(worst + best + high))  # dedup, preserve order
 
 
+def normalize_sample_id(sid: str | None) -> str | None:
+    if not sid:
+        return None
+    s = str(sid).strip()
+    if s.lower().endswith(".jpg") or s.lower().endswith(".png"):
+        s = Path(s).stem
+    return s
+
+
+def get_prediction_for_sample(
+    sid: str,
+    preds: dict[str, np.ndarray],
+    probs: dict[str, np.ndarray],
+    gts: dict[str, np.ndarray],
+    config: dict,
+    model: torch.nn.Module | None = None,
+    device: torch.device | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Retrieve existing prediction or run on-the-fly inference for any sample ID."""
+    sid = normalize_sample_id(sid)
+    if sid in preds:
+        return preds[sid], gts[sid], probs.get(sid, np.zeros_like(preds[sid], dtype=np.float32))
+
+    imgs_dir = Path(config["paths"]["processed_images_dir"])
+    masks_dir = Path(config["paths"]["lesion_masks_dir"])
+    leaf_dir = Path(config["paths"]["leaf_masks_dir"]) if config["paths"].get("leaf_masks_dir") else None
+    size = int(config["data"]["image_size"])
+    use_leaf_masking = bool(config["training"].get("use_leaf_masking", False))
+
+    img_path = imgs_dir / f"{sid}.jpg"
+    mask_path = masks_dir / f"{sid}.png"
+
+    if not img_path.exists():
+        raise FileNotFoundError(f"Image not found for sample '{sid}': {img_path}")
+    if not mask_path.exists():
+        raise FileNotFoundError(f"Lesion mask not found for sample '{sid}': {mask_path}")
+
+    img_rgb = load_rgb(img_path, size)
+    gt_mask = load_mask(mask_path, size)
+    lmask = (
+        load_mask(leaf_dir / f"{sid}.png", size)
+        if (leaf_dir and (leaf_dir / f"{sid}.png").exists())
+        else np.ones((size, size), dtype=np.uint8)
+    )
+
+    if model is not None and device is not None:
+        inp = img_rgb.astype(np.float32) / 255.0
+        if use_leaf_masking:
+            inp = inp * lmask[:, :, None]
+
+        tensor_in = torch.from_numpy(inp.transpose(2, 0, 1)).unsqueeze(0).float().to(device)
+        model.eval()
+        with torch.no_grad():
+            logits = model(tensor_in)
+            prob = torch.sigmoid(logits)[0, 0].cpu().numpy()
+            pred = (prob >= 0.5).astype(np.uint8)
+            if use_leaf_masking:
+                pred = pred & (lmask > 0)
+                gt_mask = gt_mask & (lmask > 0)
+    else:
+        prob = np.zeros((size, size), dtype=np.float32)
+        pred = np.zeros((size, size), dtype=np.uint8)
+
+    return pred, gt_mask, prob
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Image generators — one function per INSERT placeholder group
 # ──────────────────────────────────────────────────────────────────────────────
 
-def gen_slide1_images(preds, probs, gts, config, manifest):
+def gen_slide1_images(
+    preds, probs, gts, config, manifest, sample_id: str | None = None, model=None, device=None
+):
     """Slide 1: Best qualitative result + best comparison result."""
-    ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=0)
-    sid = ids[0] if ids else list(preds.keys())[0]
+    if sample_id:
+        sid = normalize_sample_id(sample_id)
+        pred, gt, prob = get_prediction_for_sample(sid, preds, probs, gts, config, model, device)
+    else:
+        ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=0)
+        sid = ids[0] if ids else list(preds.keys())[0]
+        pred, gt, prob = preds[sid], gts[sid], probs.get(sid, np.zeros_like(preds[sid], dtype=np.float32))
+
     imgs_dir = Path(config["paths"]["processed_images_dir"])
-    masks_dir = Path(config["paths"]["lesion_masks_dir"])
     size = int(config["data"]["image_size"])
 
     img = load_rgb(imgs_dir / f"{sid}.jpg", size)
-    gt  = load_mask(masks_dir / f"{sid}.png", size)
-    pred = preds[sid]
-    prob = probs[sid]
+    dice = dice_coefficient(*confusion_counts(pred, gt)[:3])
 
     fig, axes = plt.subplots(1, 4, figsize=(16, 4))
     axes[0].imshow(img); axes[0].set_title("Image", fontsize=11, fontweight="bold")
     axes[1].imshow(overlay(img, gt, (0, 200, 0))); axes[1].set_title("Ground truth", fontsize=11, fontweight="bold")
-    axes[2].imshow(overlay(img, pred, (220, 0, 0))); axes[2].set_title(f"Prediction  dice={dice_coefficient(*confusion_counts(pred, gt)[:3]):.3f}", fontsize=11)
+    axes[2].imshow(overlay(img, pred, (220, 0, 0))); axes[2].set_title(f"Prediction  dice={dice:.3f}", fontsize=11)
     axes[3].imshow(img); im = axes[3].imshow(prob, cmap="inferno", alpha=0.6, vmin=0, vmax=1)
     axes[3].set_title("Confidence heatmap", fontsize=11); fig.colorbar(im, ax=axes[3], fraction=0.046)
     for ax in axes: ax.axis("off")
     fig.tight_layout()
     p = save(fig, "slide01_best_qualitative.png")
     manifest.append(f"SLIDE 1 | INSERT: Best qualitative result | {p}")
-    print(f"  saved {p.name}")
+    print(f"  saved {p.name} (sample: {sid}, dice: {dice:.3f})")
 
 
-def gen_slide2_research_image(config, manifest):
+def gen_slide2_research_image(config, manifest, sample_id: str | None = None):
     """Slide 2: Example maize leaf showing GLS lesions."""
     imgs_dir = Path(config["paths"]["processed_images_dir"])
     masks_dir = Path(config["paths"]["lesion_masks_dir"])
     size = int(config["data"]["image_size"])
-    split_file = Path(config["paths"]["split_dir"]) / "test.txt"
-    ids = split_file.read_text().strip().splitlines()
 
-    # pick highest coverage sample as the most visually striking
-    best_sid, best_cov = ids[0], 0
-    for sid in ids:
-        m = load_mask(masks_dir / f"{sid}.png", size)
-        cov = m.mean() * 100
-        if cov > best_cov:
-            best_cov, best_sid = cov, sid
+    if sample_id:
+        best_sid = normalize_sample_id(sample_id)
+        gt = load_mask(masks_dir / f"{best_sid}.png", size)
+        best_cov = gt.mean() * 100
+    else:
+        split_file = Path(config["paths"]["split_dir"]) / "test.txt"
+        ids = split_file.read_text().strip().splitlines()
+
+        # pick highest coverage sample as the most visually striking
+        best_sid, best_cov = ids[0], 0
+        for sid in ids:
+            m = load_mask(masks_dir / f"{sid}.png", size)
+            cov = m.mean() * 100
+            if cov > best_cov:
+                best_cov, best_sid = cov, sid
+        gt = load_mask(masks_dir / f"{best_sid}.png", size)
 
     img = load_rgb(imgs_dir / f"{best_sid}.jpg", size)
-    gt  = load_mask(masks_dir / f"{best_sid}.png", size)
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
     axes[0].imshow(img); axes[0].set_title("Maize leaf — GLS visible", fontweight="bold")
     axes[1].imshow(overlay(img, gt, (0, 200, 0))); axes[1].set_title(f"Lesion mask overlay  coverage={best_cov:.1f}%", fontweight="bold")
@@ -187,21 +264,24 @@ def gen_slide2_research_image(config, manifest):
     print(f"  saved {p.name}")
 
 
-def gen_slide3_dataset_triplet(config, manifest):
+def gen_slide3_dataset_triplet(config, manifest, sample_id: str | None = None):
     """Slide 3: Original image | Leaf mask | Lesion mask."""
     imgs_dir  = Path(config["paths"]["processed_images_dir"])
     masks_dir = Path(config["paths"]["lesion_masks_dir"])
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
     size = int(config["data"]["image_size"])
-    split_file = Path(config["paths"]["split_dir"]) / "test.txt"
-    ids = split_file.read_text().strip().splitlines()
 
-    sid = ids[0]
-    for s in ids:
-        m = load_mask(masks_dir / f"{s}.png", size)
-        if m.mean() * 100 > 5:
-            sid = s
-            break
+    if sample_id:
+        sid = normalize_sample_id(sample_id)
+    else:
+        split_file = Path(config["paths"]["split_dir"]) / "test.txt"
+        ids = split_file.read_text().strip().splitlines()
+        sid = ids[0]
+        for s in ids:
+            m = load_mask(masks_dir / f"{s}.png", size)
+            if m.mean() * 100 > 5:
+                sid = s
+                break
 
     img  = load_rgb(imgs_dir / f"{sid}.jpg", size)
     lmask = load_mask(leaf_dir / f"{sid}.png", size) if (leaf_dir / f"{sid}.png").exists() else np.ones((size, size), dtype=np.uint8)
@@ -224,7 +304,7 @@ def gen_slide4_masking(config, manifest, sample_id: str | None = None):
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
     size = int(config["data"]["image_size"])
     if sample_id:
-        sid = sample_id
+        sid = normalize_sample_id(sample_id)
     else:
         split_file = Path(config["paths"]["split_dir"]) / "test.txt"
         sid = split_file.read_text().strip().splitlines()[0]
@@ -367,34 +447,37 @@ def gen_slide7_baseline_grid(preds, probs, gts, config, manifest):
     print(f"  saved {p.name}")
 
 
-def gen_slide8_leafmasked_triple(preds, gts, config, manifest, sample_id: str | None = None):
+def gen_slide8_leafmasked_triple(
+    preds, probs, gts, config, manifest, sample_id: str | None = None, model=None, device=None
+):
     """Slide 8: Leaf-masked input | prediction | ground truth."""
     if sample_id:
-        sid = sample_id
+        sid = normalize_sample_id(sample_id)
+        pred, gt, prob = get_prediction_for_sample(sid, preds, probs, gts, config, model, device)
     else:
         sample_ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=0)
         sid = sample_ids[0] if sample_ids else list(preds.keys())[0]
+        pred, gt, prob = preds[sid], gts[sid], probs.get(sid, np.zeros_like(preds[sid], dtype=np.float32))
 
     imgs_dir  = Path(config["paths"]["processed_images_dir"])
-    masks_dir = Path(config["paths"]["lesion_masks_dir"])
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
     size = int(config["data"]["image_size"])
 
     img   = load_rgb(imgs_dir / f"{sid}.jpg", size)
-    gt    = load_mask(masks_dir / f"{sid}.png", size)
-    pred  = preds.get(sid, np.zeros((size, size), dtype=np.uint8))
     lmask = load_mask(leaf_dir / f"{sid}.png", size) if (leaf_dir / f"{sid}.png").exists() else np.ones((size, size), dtype=np.uint8)
     masked_img = img * lmask[:, :, None]
 
+    dice = dice_coefficient(*confusion_counts(pred, gt)[:3])
+
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
-    titles = ["Leaf-masked input\n(what model sees)", f"Prediction\ndice={dice_coefficient(*confusion_counts(pred,gt)[:3]):.3f}", "Ground truth"]
+    titles = ["Leaf-masked input\n(what model sees)", f"Prediction\ndice={dice:.3f}", "Ground truth"]
     images = [masked_img, overlay(img, pred, (220, 0, 0)), overlay(img, gt, (0, 200, 0))]
     for ax, im_, t in zip(axes, images, titles):
         ax.imshow(im_); ax.set_title(t, fontweight="bold"); ax.axis("off")
     fig.tight_layout()
     p = save(fig, "slide08_leafmasked_triple.png")
     manifest.append(f"SLIDE 8 | INSERT: Leaf-masked input + Prediction + Ground truth | {p}")
-    print(f"  saved {p.name}")
+    print(f"  saved {p.name} (sample: {sid}, dice: {dice:.3f})")
 
 
 def gen_slide10_qualitative_comparison(
@@ -462,23 +545,28 @@ def gen_slide10_qualitative_comparison(
     print(f"  saved {p.name}")
 
 
-def gen_slide11_coverage(preds, gts, config, manifest):
+def gen_slide11_coverage(
+    preds, probs, gts, config, manifest, sample_id: str | None = None, model=None, device=None
+):
     """Slide 11: Leaf mask | lesion prediction | coverage overlay."""
-    sample_ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=1)
-    sid = sample_ids[-1] if sample_ids else list(preds.keys())[0]
+    if sample_id:
+        sid = normalize_sample_id(sample_id)
+        pred, gt, prob = get_prediction_for_sample(sid, preds, probs, gts, config, model, device)
+    else:
+        sample_ids = pick_samples(preds, gts, n_best=1, n_worst=0, n_high_cov=1)
+        sid = sample_ids[-1] if sample_ids else list(preds.keys())[0]
+        pred, gt, prob = preds[sid], gts[sid], probs.get(sid, np.zeros_like(preds[sid], dtype=np.float32))
+
     imgs_dir  = Path(config["paths"]["processed_images_dir"])
-    masks_dir = Path(config["paths"]["lesion_masks_dir"])
     leaf_dir  = Path(config["paths"]["leaf_masks_dir"])
     size = int(config["data"]["image_size"])
 
     img   = load_rgb(imgs_dir / f"{sid}.jpg", size)
-    gt    = load_mask(masks_dir / f"{sid}.png", size)
-    pred  = preds[sid]
     lmask = load_mask(leaf_dir / f"{sid}.png", size) if (leaf_dir / f"{sid}.png").exists() else np.ones((size, size), dtype=np.uint8)
 
-    leaf_px   = lmask.sum()
-    lesion_px = (pred & lmask).sum()
-    coverage  = lesion_px / leaf_px * 100 if leaf_px > 0 else 0
+    leaf_px   = int(lmask.sum())
+    lesion_px = int((pred & lmask).sum())
+    coverage  = float(lesion_px / leaf_px * 100.0) if leaf_px > 0 else 0.0
 
     combined = overlay(overlay(img, lmask, (0,150,255), 0.2), pred & lmask, (220,0,0), 0.5)
 
@@ -503,8 +591,12 @@ def main(
     old_ckpt_dir: str | None,
     new_ckpt_dir: str | None,
     n: int,
+    slide1_sample_id: str | None = None,
+    slide2_sample_id: str | None = None,
+    slide3_sample_id: str | None = None,
     slide4_sample_id: str | None = None,
     slide8_sample_id: str | None = None,
+    slide11_sample_id: str | None = None,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
@@ -517,6 +609,7 @@ def main(
     if not new_ckpt.exists() and new_ckpt_dir:
         new_ckpt = Path(new_ckpt_dir) / f"{experiment}.pt"
 
+    model = None
     if not new_ckpt.exists():
         print(f"No checkpoint found for {experiment} — skipping inference-dependent slides.")
         new_preds = new_probs = new_gts = {}
@@ -560,15 +653,24 @@ def main(
     # ── Generate all slides ────────────────────────────────────────────────────
     print("\nGenerating slide images...")
 
-    if new_preds:
+    if new_preds or (model is not None and slide1_sample_id):
         print("Slide 1: best qualitative result")
-        gen_slide1_images(new_preds, new_probs, new_gts, config, manifest)
+        gen_slide1_images(
+            new_preds,
+            new_probs,
+            new_gts,
+            config,
+            manifest,
+            sample_id=slide1_sample_id,
+            model=model,
+            device=device,
+        )
 
     print("Slide 2: research image")
-    gen_slide2_research_image(config, manifest)
+    gen_slide2_research_image(config, manifest, sample_id=slide2_sample_id)
 
     print("Slide 3: dataset triplet")
-    gen_slide3_dataset_triplet(config, manifest)
+    gen_slide3_dataset_triplet(config, manifest, sample_id=slide3_sample_id)
 
     print("Slide 4: before/after masking")
     gen_slide4_masking(config, manifest, sample_id=slide4_sample_id)
@@ -584,16 +686,35 @@ def main(
         print("Slide 7: baseline qualitative grid")
         gen_slide7_baseline_grid(new_preds, new_probs, new_gts, config, manifest)
 
+    if new_preds or (model is not None and slide8_sample_id):
         print("Slide 8: leaf-masked triple")
-        gen_slide8_leafmasked_triple(new_preds, new_gts, config, manifest, sample_id=slide8_sample_id)
+        gen_slide8_leafmasked_triple(
+            new_preds,
+            new_probs,
+            new_gts,
+            config,
+            manifest,
+            sample_id=slide8_sample_id,
+            model=model,
+            device=device,
+        )
 
     if old_preds and new_preds:
         print("Slide 10: qualitative comparison old vs new")
         gen_slide10_qualitative_comparison(old_preds, old_probs, new_preds, new_probs, new_gts, config, manifest, n=n)
 
-    if new_preds:
+    if new_preds or (model is not None and slide11_sample_id):
         print("Slide 11: coverage")
-        gen_slide11_coverage(new_preds, new_gts, config, manifest)
+        gen_slide11_coverage(
+            new_preds,
+            new_probs,
+            new_gts,
+            config,
+            manifest,
+            sample_id=slide11_sample_id,
+            model=model,
+            device=device,
+        )
 
     # ── Save manifest ──────────────────────────────────────────────────────────
     manifest_path = OUT_DIR / "slide_image_manifest.txt"
@@ -617,17 +738,29 @@ if __name__ == "__main__":
                         help="Directory of NEW (leaf-masked 512x512) .pt files — overrides config path if given")
     parser.add_argument("--n", type=int, default=4,
                         help="Number of samples in comparison grid (default: 4)")
+    parser.add_argument("--slide1-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 1 (default: best test prediction)")
+    parser.add_argument("--slide2-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 2 (default: highest coverage test sample)")
+    parser.add_argument("--slide3-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 3 dataset triplet (default: first test sample >5% cov)")
     parser.add_argument("--slide4-sample-id", default=None,
                         help="Specific sample ID to use for Slide 4 before/after leaf masking (default: first test sample)")
     parser.add_argument("--slide8-sample-id", default=None,
                         help="Specific sample ID to use for Slide 8 leaf-masked triple (default: best test prediction)")
+    parser.add_argument("--slide11-sample-id", default=None,
+                        help="Specific sample ID to use for Slide 11 coverage visualization (default: high coverage test prediction)")
     args = parser.parse_args()
     main(
         args.experiment,
         args.old_checkpoints_dir,
         args.new_checkpoints_dir,
         args.n,
-        args.slide4_sample_id,
-        args.slide8_sample_id,
+        slide1_sample_id=args.slide1_sample_id,
+        slide2_sample_id=args.slide2_sample_id,
+        slide3_sample_id=args.slide3_sample_id,
+        slide4_sample_id=args.slide4_sample_id,
+        slide8_sample_id=args.slide8_sample_id,
+        slide11_sample_id=args.slide11_sample_id,
     )
 
