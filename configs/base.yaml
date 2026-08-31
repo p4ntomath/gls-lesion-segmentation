@@ -34,3 +34,4 @@ training:
   bce_weight: 0.5                           # §4.2.8
   threshold: 0.5                             # §4.2.7
   augmentation: false                        # overridden per experiment, see experiments/*/config.yaml
+  use_leaf_masking: false                    # leaf masking disabled by default
