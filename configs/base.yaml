@@ -17,7 +17,7 @@ paths:
 
 data:
   label_statuses: ["LABELED", "REVIEWED"]   # proposal §4.1.1: exclude samples with no ground truth
-  image_size: 512                            # higher-resolution leaf-aware training
+  image_size: 256                            # standard resolution
   seed: 42
   split_ratios: [0.70, 0.15, 0.15]           # §4.2.3
   stratify_bins: 3                           # low / medium / high coverage bins
@@ -35,3 +35,4 @@ training:
   bce_weight: 0.5                           # §4.2.8
   threshold: 0.5                             # §4.2.7
   augmentation: false                        # overridden per experiment, see experiments/*/config.yaml
+  use_leaf_masking: true                     # leaf masking enabled by default
