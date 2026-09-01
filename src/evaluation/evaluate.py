@@ -7,7 +7,6 @@ Responsibilities:
     - Threshold predictions (0.5, or value selected on val set).
     - Compute Dice / IoU / precision / recall (src/training/metrics.py).
     - Compute leaf-area coverage MAE / RMSE / Pearson r (src/evaluation/coverage.py).
-    - Save results to experiments/<experiment>/results.json
     - Save results to outputs/results/<experiment>/results.json
 """
 
@@ -402,9 +401,6 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
         "per_image": combined_per_image,
     }
 
-    exp_dir = Path("experiments") / experiment
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    results_path = exp_dir / "results.json"
     results_base = Path(config.get("paths", {}).get("results_dir", "outputs/results"))
     results_dir = results_base / experiment
     results_dir.mkdir(parents=True, exist_ok=True)

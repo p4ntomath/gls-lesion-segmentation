@@ -42,7 +42,6 @@ def effect_size_r(statistic: float, n: int) -> float:
 def _load_results(experiment: str, results_dir: Path) -> dict:
     path = results_dir / experiment / "results.json"
     if not path.exists():
-        raise FileNotFoundError(f"Missing results file for {experiment}: {path}")
         fallback_paths = [
             Path("outputs/results") / experiment / "results.json",
             Path("experiments") / experiment / "results.json",
@@ -64,7 +63,6 @@ def _metric_values(experiment: str, results_dir: Path, metric: str) -> tuple[lis
     return sample_ids, np.asarray(values, dtype=float)
 
 
-def main(results_dir: str = "experiments", metric: str = "dice") -> None:
 def main(results_dir: str = "outputs/results", metric: str = "dice") -> None:
     results_path = Path(results_dir)
     comparisons = [
@@ -95,7 +93,6 @@ def main(results_dir: str = "outputs/results", metric: str = "dice") -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run paired Wilcoxon comparisons between experiment results.")
-    parser.add_argument("--results-dir", default="experiments", help="Directory containing experiment folders")
     parser.add_argument("--results-dir", default="outputs/results", help="Directory containing experiment folders")
     parser.add_argument("--metric", default="dice", help="Per-image metric to compare (dice, iou, precision, recall)")
     args = parser.parse_args()

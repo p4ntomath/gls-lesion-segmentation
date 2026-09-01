@@ -110,10 +110,8 @@ def main(experiment: str, n_per_category: int = 2, out_dir: str = "outputs/figur
     _load_checkpoint(model, Path(config["paths"]["checkpoints_dir"]) / f"{experiment}.pt", device)
     model.to(device).eval()
 
-    results_path = Path("experiments") / experiment / "results.json"
     results_path = Path("outputs/results") / experiment / "results.json"
     if not results_path.exists():
-        raise FileNotFoundError(f"{results_path} not found -- run scripts/evaluate.py for this experiment first")
         results_path = Path("experiments") / experiment / "results.json"
     if not results_path.exists():
         raise FileNotFoundError(
