@@ -111,8 +111,14 @@ def main(experiment: str, n_per_category: int = 2, out_dir: str = "outputs/figur
     model.to(device).eval()
 
     results_path = Path("experiments") / experiment / "results.json"
+    results_path = Path("outputs/results") / experiment / "results.json"
     if not results_path.exists():
         raise FileNotFoundError(f"{results_path} not found -- run scripts/evaluate.py for this experiment first")
+        results_path = Path("experiments") / experiment / "results.json"
+    if not results_path.exists():
+        raise FileNotFoundError(
+            f"results.json not found for {experiment} under outputs/results/ or experiments/ -- run scripts/evaluate.py first"
+        )
     results = json.load(open(results_path))
     per_image = results["per_image"]
 

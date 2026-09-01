@@ -8,6 +8,7 @@ Responsibilities:
     - Compute Dice / IoU / precision / recall (src/training/metrics.py).
     - Compute leaf-area coverage MAE / RMSE / Pearson r (src/evaluation/coverage.py).
     - Save results to experiments/<experiment>/results.json
+    - Save results to outputs/results/<experiment>/results.json
 """
 
 from __future__ import annotations
@@ -405,6 +406,8 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
     }
 
     results_dir = Path("outputs/results") / experiment
+    results_base = Path(config.get("paths", {}).get("results_dir", "outputs/results"))
+    results_dir = results_base / experiment
     results_dir.mkdir(parents=True, exist_ok=True)
 
     results_path = results_dir / "results.json"

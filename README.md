@@ -69,10 +69,13 @@ gls-lesion-segmentation/
 │   ├── checkpoints/    # best model weights per experiment
 │   ├── logs/            # per-epoch training curves
 │   └── figures/          # overlays, plots for the report
+│   ├── figures/          # overlays, plots for the report
+│   └── results/          # per-experiment evaluation metrics (results.json)
 │
 ├── reports/                       # thesis-facing assets, separate from outputs/
 │   ├── figures/                     # final polished figures for the report
 │   ├── tables/                       # exported results tables (from experiments/*/results.json)
+│   ├── tables/                       # exported results tables (from outputs/results/*/results.json)
 │   └── drafts/                        # methodology notes, draft sections
 │
 ├── tests/
