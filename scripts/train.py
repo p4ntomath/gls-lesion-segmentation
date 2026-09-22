@@ -146,15 +146,27 @@ def main(
     epochs_without_improvement = 0
     should_resume = resume or (resume_from is not None)
     if should_resume:
-        resume_state = trainer.resume_from_checkpoint(
-            checkpoint_path=resume_from,
-            strict_config=not allow_resume_config_mismatch,
+        ckpt_to_check = Path(resume_from) if resume_from is not None else None
+        has_checkpoint = (
+            ckpt_to_check.exists() if ckpt_to_check is not None
+            else (trainer.latest_checkpoint_path.exists() or trainer.best_checkpoint_path.exists())
         )
-        start_epoch = int(resume_state["start_epoch"])
-        epochs_without_improvement = int(resume_state["epochs_without_improvement"])
-        source = resume_from if resume_from is not None else str(trainer.latest_checkpoint_path)
-        print(f"Resumed from checkpoint: {source}", flush=True)
-        print(f"  next epoch: {start_epoch}", flush=True)
+        if has_checkpoint:
+            resume_state = trainer.resume_from_checkpoint(
+                checkpoint_path=resume_from,
+                strict_config=not allow_resume_config_mismatch,
+            )
+            start_epoch = int(resume_state["start_epoch"])
+            epochs_without_improvement = int(resume_state["epochs_without_improvement"])
+            source = resume_from if resume_from is not None else (
+                str(trainer.latest_checkpoint_path) if trainer.latest_checkpoint_path.exists() else str(trainer.best_checkpoint_path)
+            )
+            print(f"Resumed from checkpoint: {source}", flush=True)
+            print(f"  next epoch: {start_epoch}", flush=True)
+        elif resume_from is not None:
+            raise FileNotFoundError(f"Specified checkpoint not found: {resume_from}")
+        else:
+            print(f"  No existing checkpoint found — starting fresh training.", flush=True)
 
     print(f"Starting training for experiment: {config['experiment_name']}", flush=True)
     print(f"  device: {trainer.device}", flush=True)
