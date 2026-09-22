@@ -1,7 +1,4 @@
-"""Reusable helpers for progress reporting with tqdm."""
-
-from __future__ import annotations
-
+import sys
 from typing import Any
 
 from tqdm.auto import tqdm
@@ -29,16 +26,20 @@ def create_progress_bar(
     *,
     total: int | None = None,
     desc: str = "",
-    leave: bool = True,
+    leave: bool = False,
     unit: str = "it",
+    disable: bool | None = None,
     **kwargs: Any,
 ) -> tqdm:
     """Create a consistent tqdm bar for CLI and notebook use."""
+    if disable is None:
+        disable = not sys.stdout.isatty()
     return tqdm(
         total=total,
         desc=desc,
         leave=leave,
         unit=unit,
+        disable=disable,
         dynamic_ncols=True,
         **kwargs,
     )

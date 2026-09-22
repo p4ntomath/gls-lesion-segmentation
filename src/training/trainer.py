@@ -343,7 +343,6 @@ class Trainer:
 
         for epoch in range(start_epoch, self.max_epochs + 1):
             self.current_epoch = epoch
-            print(f"Starting epoch {epoch}/{self.max_epochs}", flush=True)
             train_loss = self.train_epoch()
             val_metrics = self.validate()
 
@@ -357,7 +356,8 @@ class Trainer:
 
             self._save_checkpoint(self.latest_checkpoint_path, epoch, val_metrics, epochs_without_improvement)
 
-            if val_metrics["dice"] > self.best_val_dice:
+            is_best = val_metrics["dice"] > self.best_val_dice
+            if is_best:
                 self.best_val_dice = val_metrics["dice"]
                 self.best_epoch = epoch
                 epochs_without_improvement = 0
@@ -365,10 +365,13 @@ class Trainer:
             else:
                 epochs_without_improvement += 1
 
+            best_tag = " ⭐ (best)" if is_best else ""
             print(
-                f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | "
-                f"val_loss={val_metrics['val_loss']:.4f} | dice={val_metrics['dice']:.4f} | "
-                f"iou={val_metrics['iou']:.4f}",
+                f"Epoch {epoch:03d}/{self.max_epochs:03d} | "
+                f"train_loss={train_loss:.4f} | "
+                f"val_loss={val_metrics['val_loss']:.4f} | "
+                f"val_dice={val_metrics['dice']:.4f} | "
+                f"val_iou={val_metrics['iou']:.4f}{best_tag}",
                 flush=True,
             )
 
