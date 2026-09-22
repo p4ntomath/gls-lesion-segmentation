@@ -67,7 +67,7 @@ def build_model(config: dict):
     raise ValueError(f"Unknown model name: {model_cfg['name']}")
 
 
-def build_loaders(config: dict):
+def build_loaders(config: dict, seed: int = 42):
     paths = config["paths"]
     data_cfg = config["data"]
     training_cfg = config["training"]
@@ -104,7 +104,11 @@ def build_loaders(config: dict):
         apply_leaf_masking=apply_leaf_masking,
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    # Use seeded generator so shuffle order is reproducible per seed
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, generator=generator)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader
 
@@ -114,15 +118,27 @@ def main(
     max_epochs: int | None = None,
     patience: int | None = None,
     *,
+    seed: int | None = None,
+    output_tag: str = "",
     resume: bool = False,
     resume_from: str | None = None,
     allow_resume_config_mismatch: bool = False,
 ) -> None:
     config = load_experiment_config(experiment)
-    set_seed(int(config["data"].get("seed", 42)))
+
+    # Determine effective seed: CLI --seed overrides config seed
+    effective_seed = seed if seed is not None else int(config["data"].get("seed", 42))
+    set_seed(effective_seed)
+    print(f"  seed: {effective_seed}", flush=True)
+
+    # If an output_tag is given, patch experiment_name so Trainer writes
+    # checkpoints / logs under e.g. "exp01_unet_noaug_seed00"
+    if output_tag:
+        config["experiment_name"] = f"{experiment}_{output_tag}"
+        print(f"  output tag: {output_tag}", flush=True)
 
     model = build_model(config)
-    train_loader, val_loader = build_loaders(config)
+    train_loader, val_loader = build_loaders(config, seed=effective_seed)
     trainer = Trainer(model, train_loader, val_loader, config)
 
     start_epoch = 1
@@ -139,7 +155,7 @@ def main(
         print(f"Resumed from checkpoint: {source}", flush=True)
         print(f"  next epoch: {start_epoch}", flush=True)
 
-    print(f"Starting training for experiment: {experiment}", flush=True)
+    print(f"Starting training for experiment: {config['experiment_name']}", flush=True)
     print(f"  device: {trainer.device}", flush=True)
     print(f"  train samples: {len(train_loader.dataset)}", flush=True)
     print(f"  val samples: {len(val_loader.dataset)}", flush=True)
@@ -160,6 +176,8 @@ if __name__ == "__main__":
     parser.add_argument("--experiment", required=True, help="Experiment folder name under experiments/")
     parser.add_argument("--max-epochs", type=int, default=None, help="Override max epochs for this training run")
     parser.add_argument("--patience", type=int, default=None, help="Override early stopping patience for this training run")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed (overrides config seed if set)")
+    parser.add_argument("--output-tag", default="", help="Tag appended to checkpoint/log filenames e.g. 'seed00'")
     parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint for this experiment")
     parser.add_argument("--resume-from", default=None, help="Path to a specific checkpoint file to resume from")
     parser.add_argument(
@@ -172,6 +190,8 @@ if __name__ == "__main__":
         args.experiment,
         max_epochs=args.max_epochs,
         patience=args.patience,
+        seed=args.seed,
+        output_tag=args.output_tag,
         resume=args.resume,
         resume_from=args.resume_from,
         allow_resume_config_mismatch=args.allow_resume_config_mismatch,

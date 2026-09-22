@@ -314,12 +314,18 @@ def _load_leaf_masks(leaf_masks_dir: Path, sample_ids: list[str], image_size: in
     return leaf_masks, missing
 
 
-def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
+def main(experiment: str, config_path: str = "configs/base.yaml", output_tag: str = "") -> None:
     config = load_experiment_config(experiment, config_path=config_path)
     set_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Build the tagged name used for checkpoint and results paths
+    experiment_name = f"{experiment}_{output_tag}" if output_tag else experiment
+    if output_tag:
+        print(f"  output tag: {output_tag}", flush=True)
+    print(f"  loading checkpoint: {experiment_name}.pt", flush=True)
+
     model = build_model(config)
-    _load_checkpoint(model, Path(config["paths"]["checkpoints_dir"]) / f"{experiment}.pt", set_device)
+    _load_checkpoint(model, Path(config["paths"]["checkpoints_dir"]) / f"{experiment_name}.pt", set_device)
     model.to(set_device)
 
     test_loader = build_test_loader(config)
@@ -393,6 +399,7 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
 
     results = {
         "experiment": experiment,
+        "output_tag": output_tag,
         "summary": {
             **segmentation_summary,
             "segmentation_masked_by_leaf": masked_summary if leaf_masks else "skipped -- no leaf masks available yet",
@@ -405,7 +412,7 @@ def main(experiment: str, config_path: str = "configs/base.yaml") -> None:
     }
 
     results_base = Path(config.get("paths", {}).get("results_dir", "outputs/results"))
-    results_dir = results_base / experiment
+    results_dir = results_base / experiment_name
     results_dir.mkdir(parents=True, exist_ok=True)
 
     results_path = results_dir / "results.json"
@@ -421,5 +428,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a trained GLS segmentation experiment")
     parser.add_argument("--experiment", required=True, help="Experiment folder name under experiments/")
     parser.add_argument("--config", default="configs/base.yaml", help="Base config to resolve experiment settings")
+    parser.add_argument("--output-tag", default="", help="Tag matching the checkpoint filename suffix (e.g. 'seed00')")
     args = parser.parse_args()
-    main(args.experiment, config_path=args.config)
+    main(args.experiment, config_path=args.config, output_tag=args.output_tag)
