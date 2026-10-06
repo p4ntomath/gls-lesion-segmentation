@@ -36,3 +36,4 @@ training:
   threshold: 0.5                             # §4.2.7
   augmentation: false                        # overridden per experiment, see experiments/*/config.yaml
   use_leaf_masking: true                     # leaf masking enabled by default
+  num_workers: 0                             # TPU-safe default; multiprocessing can cause issues on XLA

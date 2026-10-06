@@ -1,6 +1,33 @@
-"""Trainer class shared by all experiments.
+"""Trainer class — device-agnostic (CPU · CUDA · TPU/XLA).
 
 Proposal ref: §4.2.8, §4.2.11
+
+Device selection
+----------------
+Set the environment variable ``GLS_DEVICE`` before launching the script:
+
+    GLS_DEVICE=xla   → TPU via torch_xla   (Google Colab TPU / TPU VM)
+    GLS_DEVICE=cuda  → force CUDA GPU
+    GLS_DEVICE=cpu   → force CPU
+    (unset / "auto") → CUDA if available, else CPU
+
+The Trainer reads ``GLS_DEVICE`` once at construction and places the model
+on the chosen device.  Everything else — loss, metrics, checkpointing, CSV
+logging — is device-agnostic.
+
+TPU / XLA specifics
+-------------------
+* ``xm.mark_step()`` is called after every optimizer step to flush the XLA
+  lazy-execution graph.  This is the single most important TPU requirement;
+  without it the TPU queues work but never executes it.
+* Checkpoints are saved via ``xm.save()`` on TPU (saves CPU tensors) and
+  via ``torch.save()`` on CPU/CUDA.  This means checkpoints are always
+  portable and can be loaded on any device.
+* ``torch.load()`` always maps to CPU first, then the model is moved to the
+  target device via ``.to(self.device)``.  XLA devices do not support
+  ``map_location=<xla_device>`` directly.
+* CUDA-specific calls (``torch.cuda.*``, ``torch.backends.cudnn.*``) are
+  guarded so they are never invoked when running on TPU.
 """
 
 from __future__ import annotations
@@ -8,6 +35,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import random
 from pathlib import Path
 from typing import Any
@@ -19,6 +47,51 @@ from src.training.losses import BCEDiceLoss
 from src.training.metrics import confusion_counts, dice_coefficient, iou_score, precision_score, recall_score
 from src.utils.progress import create_progress_bar
 
+# ── Optional XLA import (only used when GLS_DEVICE=xla) ──────────────────────
+_xm = None  # lazily populated
+
+
+def _get_xm():
+    """Return torch_xla.core.xla_model, importing it on first call."""
+    global _xm
+    if _xm is None:
+        try:
+            import torch_xla.core.xla_model as xm  # type: ignore[import]
+            _xm = xm
+        except ImportError as exc:
+            raise ImportError(
+                "GLS_DEVICE=xla requires torch_xla, which is not installed.\n"
+                "Install it with:  pip install torch_xla[tpu]\n"
+                "or run without --device xla to use CPU/CUDA."
+            ) from exc
+    return _xm
+
+
+def _resolve_device() -> tuple[torch.device, bool]:
+    """Return (device, is_xla).
+
+    Reads GLS_DEVICE env var.  Falls back to CUDA → CPU when not set.
+    Never calls torch.cuda.* when the selected device is XLA.
+    """
+    hint = os.environ.get("GLS_DEVICE", "auto").lower().strip()
+
+    if hint == "xla":
+        xm = _get_xm()
+        return xm.xla_device(), True
+
+    if hint == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("GLS_DEVICE=cuda requested but CUDA is not available.")
+        return torch.device("cuda"), False
+
+    if hint == "cpu":
+        return torch.device("cpu"), False
+
+    # auto: CUDA if available, else CPU
+    if torch.cuda.is_available():
+        return torch.device("cuda"), False
+    return torch.device("cpu"), False
+
 
 class Trainer:
     """Minimal training loop with validation, checkpointing, and CSV logging."""
@@ -29,7 +102,8 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # ── Device (reads GLS_DEVICE env var) ────────────────────────────────
+        self.device, self.is_xla = _resolve_device()
         self.model.to(self.device)
 
         training_cfg = config["training"]
@@ -63,21 +137,30 @@ class Trainer:
         payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    @staticmethod
-    def _get_rng_state() -> dict[str, Any]:
+    def _get_rng_state(self) -> dict[str, Any]:
+        """Capture RNG state for all active backends (CPU, CUDA, or XLA)."""
         state: dict[str, Any] = {
             "python": random.getstate(),
             "numpy": np.random.get_state(),
             "torch": torch.get_rng_state(),
         }
-        if torch.cuda.is_available():
+        if self.is_xla:
+            # XLA RNG state is an integer seed; captured as a plain int so it
+            # survives pickle / torch.save round-trips without device tensors.
+            try:
+                state["xla_seed"] = _get_xm().get_rng_state()
+            except Exception:
+                pass  # best-effort; XLA RNG resume is not critical
+        elif torch.cuda.is_available():
+            # Only capture CUDA state when actually on CUDA
             state["torch_cuda"] = torch.cuda.get_rng_state_all()
         return state
 
-    @staticmethod
-    def _set_rng_state(state: dict[str, Any] | None) -> None:
+    def _set_rng_state(self, state: dict[str, Any] | None) -> None:
+        """Restore RNG state captured by _get_rng_state()."""
         if not state:
             return
+
         python_state = state.get("python")
         if python_state is not None:
             random.setstate(python_state)
@@ -88,28 +171,32 @@ class Trainer:
 
         torch_state = state.get("torch")
         if torch_state is not None:
-            # torch.set_rng_state requires a ByteTensor on CPU
+            # torch.set_rng_state requires a CPU ByteTensor
             if not isinstance(torch_state, torch.Tensor):
-                # Convert from numpy array or list to ByteTensor
                 torch_state = torch.ByteTensor(torch_state)
             else:
-                # Ensure it's on CPU and is a ByteTensor
                 torch_state = torch_state.cpu().byte()
             torch.set_rng_state(torch_state)
 
-        cuda_state = state.get("torch_cuda")
-        if cuda_state is not None and torch.cuda.is_available():
-            # torch.cuda.set_rng_state_all requires a list of ByteTensors on CPU
-            cuda_state_converted = []
-            for s in cuda_state:
-                if not isinstance(s, torch.Tensor):
-                    # Convert from numpy array or list to ByteTensor
-                    s = torch.ByteTensor(s)
-                else:
-                    # Ensure it's a ByteTensor on CPU (PyTorch will move to correct device)
-                    s = s.cpu().byte()
-                cuda_state_converted.append(s)
-            torch.cuda.set_rng_state_all(cuda_state_converted)
+        if self.is_xla:
+            xla_seed = state.get("xla_seed")
+            if xla_seed is not None:
+                try:
+                    _get_xm().set_rng_state(int(xla_seed))
+                except Exception:
+                    pass  # best-effort
+        else:
+            # Restore CUDA state only when on CUDA and state was captured on CUDA
+            cuda_state = state.get("torch_cuda")
+            if cuda_state is not None and torch.cuda.is_available():
+                converted = []
+                for s in cuda_state:
+                    if not isinstance(s, torch.Tensor):
+                        s = torch.ByteTensor(s)
+                    else:
+                        s = s.cpu().byte()
+                    converted.append(s)
+                torch.cuda.set_rng_state_all(converted)
 
     def train_epoch(self) -> float:
         self.model.train()
@@ -138,6 +225,12 @@ class Trainer:
                 loss = self.criterion(logits, masks)
                 loss.backward()
                 self.optimizer.step()
+
+                # ── TPU: flush the XLA lazy execution graph ───────────────────
+                # This is mandatory on TPU. Without it, XLA queues work but
+                # never executes it.  It is a no-op on CPU/CUDA.
+                if self.is_xla:
+                    _get_xm().mark_step()
 
                 batch_size = images.size(0)
                 running_loss += float(loss.item()) * batch_size
@@ -238,22 +331,25 @@ class Trainer:
         return metrics
 
     def _save_checkpoint(self, checkpoint_path: Path, epoch: int, metrics: dict, epochs_without_improvement: int) -> None:
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "metrics": metrics,
-                "config": self.config,
-                "config_fingerprint": self.config_fingerprint,
-                "best_val_dice": self.best_val_dice,
-                "best_epoch": self.best_epoch,
-                "epochs_without_improvement": int(epochs_without_improvement),
-                "history": self.history,
-                "rng_state": self._get_rng_state(),
-            },
-            checkpoint_path,
-        )
+        payload = {
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "metrics": metrics,
+            "config": self.config,
+            "config_fingerprint": self.config_fingerprint,
+            "best_val_dice": self.best_val_dice,
+            "best_epoch": self.best_epoch,
+            "epochs_without_improvement": int(epochs_without_improvement),
+            "history": self.history,
+            "rng_state": self._get_rng_state(),
+        }
+        if self.is_xla:
+            # xm.save() moves XLA tensors to CPU before pickling, producing a
+            # portable checkpoint that can be loaded on any device.
+            _get_xm().save(payload, str(checkpoint_path))
+        else:
+            torch.save(payload, checkpoint_path)
 
     def resume_from_checkpoint(self, checkpoint_path: str | Path | None = None, *, strict_config: bool = True) -> dict[str, int]:
         if checkpoint_path is None:
@@ -272,7 +368,10 @@ class Trainer:
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
-        checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        # Always load to CPU first — XLA devices do not support map_location
+        # with an XLA device object directly.  The model is already on the
+        # correct device (placed there in __init__), so load_state_dict works.
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
         checkpoint_fp = checkpoint.get("config_fingerprint")
         if strict_config and checkpoint_fp is not None and checkpoint_fp != self.config_fingerprint:
@@ -343,6 +442,7 @@ class Trainer:
 
         for epoch in range(start_epoch, self.max_epochs + 1):
             self.current_epoch = epoch
+            print(f"Starting epoch {epoch}/{self.max_epochs}", flush=True)
             train_loss = self.train_epoch()
             val_metrics = self.validate()
 
@@ -365,7 +465,7 @@ class Trainer:
             else:
                 epochs_without_improvement += 1
 
-            best_tag = " ⭐ (best)" if is_best else ""
+            best_tag = " (best)" if is_best else ""
             print(
                 f"Epoch {epoch:03d}/{self.max_epochs:03d} | "
                 f"train_loss={train_loss:.4f} | "
