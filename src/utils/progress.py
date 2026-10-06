@@ -1,3 +1,7 @@
+"""Reusable helpers for progress reporting with tqdm."""
+
+from __future__ import annotations
+
 import sys
 from typing import Any
 
@@ -33,7 +37,7 @@ def create_progress_bar(
 ) -> tqdm:
     """Create a consistent tqdm bar for CLI and notebook use."""
     if disable is None:
-        disable = not sys.stdout.isatty()
+        disable = not sys.stdout.isatty() and "pytest" not in sys.modules
     return tqdm(
         total=total,
         desc=desc,

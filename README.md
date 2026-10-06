@@ -52,10 +52,14 @@ gls-lesion-segmentation/
 │                                  # data/processed/leaf_masks/. Nothing under src/training
 │                                  # or src/evaluation calls this directly.
 │
-├── scripts/                      # thin CLI entry points — the things you actually run
+├── scripts/                      # CLI entry points
 │   ├── preprocess.py               # parse -> generate_masks -> split_data
 │   ├── train.py                     # loads experiments/<exp>/config.yaml, runs Trainer
+│   ├── run_all_experiments.py      # multi-run orchestrator (all experiments × N seeds)
 │   └── evaluate.py                   # runs src.evaluation.evaluate for one experiment
+│
+├── notebooks/
+│   └── tpu_multi_run_training.ipynb # Google Colab TPU training notebook
 │
 ├── experiments/
 │   ├── exp01_unet_noaug/
@@ -132,19 +136,90 @@ python scripts/preprocess.py --config configs/base.yaml
 
 This will generate the processed images, lesion masks, split files, and related outputs under the data folders.
 
-### 6. Train a model
+### 6. Train a single experiment
 
 ```bash
+# Auto-detect device (CUDA if available, else CPU)
 python scripts/train.py --experiment exp01_unet_noaug
+
+# Or specify a seed and output tag
+python scripts/train.py --experiment exp01_unet_noaug --seed 42 --output-tag seed42
 ```
 
-### 7. Evaluate a trained model
+Device selection is controlled by the `GLS_DEVICE` environment variable:
+- `GLS_DEVICE=auto` (default): uses CUDA GPU if present, otherwise CPU
+- `GLS_DEVICE=cuda`: force CUDA GPU
+- `GLS_DEVICE=cpu`: force CPU
+- `GLS_DEVICE=xla`: use Google TPU via `torch_xla`
+
+### 7. Run multiple training runs (statistical consistency)
+
+Neural network training involves stochasticity (weight initialization, batch shuffling). To obtain statistically robust comparisons across models and augmentations, run each experiment across multiple random seeds (e.g. 10 runs):
+
+```bash
+# Run all 4 experiments × 10 seeds (CPU/GPU)
+python scripts/run_all_experiments.py --n-runs 10
+
+# Or on a Google TPU
+GLS_DEVICE=xla python scripts/run_all_experiments.py --n-runs 10 --device xla
+```
+
+Outputs generated:
+- `outputs/checkpoints/`: best model weights per run (`<experiment>_seedXX.pt`)
+- `outputs/logs/`: per-epoch training and validation loss/Dice curves
+- `outputs/results/summary.csv`: per-run summary of best validation Dice
+- `outputs/results/aggregate.csv`: mean, standard deviation, min, and max Dice per experiment
+
+### 8. Training on Google TPU (TPU VM or Colab)
+
+The codebase is device-agnostic and supports Google TPU via PyTorch/XLA without hardcoded CUDA dependencies.
+
+#### Option A: Google Cloud TPU VM
+
+1. **SSH into the TPU VM**:
+   ```bash
+   gcloud compute tpus tpu-vm ssh <YOUR-TPU-NAME> --zone=<YOUR-ZONE>
+   ```
+
+2. **Clone repo & install dependencies**:
+   ```bash
+   git clone https://github.com/p4ntomath/gls-lesion-segmentation.git
+   cd gls-lesion-segmentation
+   pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+   pip install -r requirements.txt
+   ```
+
+3. **Transfer data**:
+   ```bash
+   gsutil -m cp -r gs://YOUR-BUCKET/data ./
+   ```
+
+4. **Launch training (using tmux to persist if SSH disconnects)**:
+   ```bash
+   tmux new -s training
+   GLS_DEVICE=xla python scripts/run_all_experiments.py --n-runs 10 --device xla
+   ```
+
+5. **Copy outputs back**:
+   ```bash
+   gsutil -m cp -r outputs/ gs://YOUR-BUCKET/gls-outputs/
+   ```
+
+#### Option B: Google Colab TPU
+
+Open and run `notebooks/tpu_multi_run_training.ipynb` with **Runtime → Change runtime type → TPU**.
+- Uploads the project zip into `/content/`
+- Installs `torch_xla` and requirements
+- Executes the 4 experiments × 10 seeds benchmark
+- Zips and downloads the complete `outputs/` folder back to your local machine
+
+### 9. Evaluate a trained model
 
 ```bash
 python scripts/evaluate.py --experiment exp01_unet_noaug --config configs/base.yaml
 ```
 
-### 8. Run tests
+### 10. Run tests
 
 ```bash
 py -m pytest -q tests/test_dataset.py
