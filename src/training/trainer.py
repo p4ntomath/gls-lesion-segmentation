@@ -200,11 +200,19 @@ class Trainer:
 
     def train_epoch(self) -> float:
         self.model.train()
-        running_loss = 0.0
+        total_loss_tensor = torch.zeros((), device=self.device)
         total_samples = 0
 
+        loader = self.train_loader
+        if self.is_xla:
+            try:
+                from torch_xla.distributed.parallel_loader import MpDeviceLoader
+                loader = MpDeviceLoader(self.train_loader, self.device)
+            except Exception:
+                loader = self.train_loader
+
         with create_progress_bar(total=len(self.train_loader), desc=f"Epoch {self.current_epoch}/{self.max_epochs} training", leave=False) as train_bar:
-            for batch_idx, batch in enumerate(self.train_loader, start=1):
+            for batch_idx, batch in enumerate(loader, start=1):
                 if len(batch) == 2:
                     images, masks = batch
                     leaf = None
@@ -226,49 +234,43 @@ class Trainer:
                 loss.backward()
                 self.optimizer.step()
 
-                # ── TPU: flush the XLA lazy execution graph ───────────────────
-                # This is mandatory on TPU. Without it, XLA queues work but
-                # never executes it.  It is a no-op on CPU/CUDA.
+                # Flush XLA lazy execution graph without blocking the host CPU
                 if self.is_xla:
                     _get_xm().mark_step()
 
                 batch_size = images.size(0)
-                running_loss += float(loss.item()) * batch_size
+                total_loss_tensor = total_loss_tensor + loss.detach() * batch_size
                 total_samples += batch_size
 
-                probs = torch.sigmoid(logits)
-                pred_binary = probs >= self.threshold
-                if leaf is not None:
-                    pred_binary = pred_binary & (leaf >= 0.5)
-                    masks_for_metrics = (masks >= 0.5) & (leaf >= 0.5)
-                else:
-                    masks_for_metrics = masks >= 0.5
-                batch_tp, batch_fp, batch_fn, _ = confusion_counts(pred_binary, masks_for_metrics)
-                batch_dice = dice_coefficient(batch_tp, batch_fp, batch_fn)
-                batch_iou = iou_score(batch_tp, batch_fp, batch_fn)
-
-                lr = self.optimizer.param_groups[0].get("lr")
-                train_bar.set_postfix(
-                    epoch=self.current_epoch,
-                    batch=batch_idx,
-                    loss=f"{loss.item():.4f}",
-                    dice=f"{batch_dice:.4f}",
-                    iou=f"{batch_iou:.4f}",
-                    lr=f"{lr:.2e}",
-                )
                 train_bar.update(1)
 
-        return running_loss / max(total_samples, 1)
+        # Sync once at epoch end
+        if self.is_xla:
+            _get_xm().mark_step()
+
+        train_loss = float(total_loss_tensor.cpu().item()) / max(total_samples, 1)
+        return train_loss
 
     def validate(self) -> dict:
         self.model.eval()
-        running_loss = 0.0
+        total_loss_tensor = torch.zeros((), device=self.device)
+        tp_tensor = torch.zeros((), device=self.device, dtype=torch.int64)
+        fp_tensor = torch.zeros((), device=self.device, dtype=torch.int64)
+        fn_tensor = torch.zeros((), device=self.device, dtype=torch.int64)
+        tn_tensor = torch.zeros((), device=self.device, dtype=torch.int64)
         total_samples = 0
-        tp = fp = fn = tn = 0
+
+        loader = self.val_loader
+        if self.is_xla:
+            try:
+                from torch_xla.distributed.parallel_loader import MpDeviceLoader
+                loader = MpDeviceLoader(self.val_loader, self.device)
+            except Exception:
+                loader = self.val_loader
 
         with torch.no_grad():
             with create_progress_bar(total=len(self.val_loader), desc="Validating", leave=False) as val_bar:
-                for batch_idx, batch in enumerate(self.val_loader, start=1):
+                for batch_idx, batch in enumerate(loader, start=1):
                     if len(batch) == 2:
                         images, masks = batch
                         leaf = None
@@ -287,6 +289,10 @@ class Trainer:
                     logits = self.model(images)
                     loss = self.criterion(logits, masks)
 
+                    batch_size = images.size(0)
+                    total_loss_tensor = total_loss_tensor + loss.detach() * batch_size
+                    total_samples += batch_size
+
                     probs = torch.sigmoid(logits)
                     pred_binary = probs >= self.threshold
                     if leaf is not None:
@@ -294,29 +300,28 @@ class Trainer:
                         masks_for_metrics = (masks >= 0.5) & (leaf >= 0.5)
                     else:
                         masks_for_metrics = masks >= 0.5
-                    batch_tp, batch_fp, batch_fn, batch_tn = confusion_counts(pred_binary, masks_for_metrics)
 
-                    tp += batch_tp
-                    fp += batch_fp
-                    fn += batch_fn
-                    tn += batch_tn
+                    # Accumulate confusion counts directly on device
+                    tp_tensor = tp_tensor + (pred_binary & masks_for_metrics).sum().to(torch.int64)
+                    fp_tensor = fp_tensor + (pred_binary & (~masks_for_metrics)).sum().to(torch.int64)
+                    fn_tensor = fn_tensor + ((~pred_binary) & masks_for_metrics).sum().to(torch.int64)
+                    tn_tensor = tn_tensor + ((~pred_binary) & (~masks_for_metrics)).sum().to(torch.int64)
 
-                    batch_size = images.size(0)
-                    running_loss += float(loss.item()) * batch_size
-                    total_samples += batch_size
+                    if self.is_xla:
+                        _get_xm().mark_step()
 
-                    batch_tp_display, batch_fp_display, batch_fn_display, _ = confusion_counts(pred_binary, masks_for_metrics)
-                    batch_dice = dice_coefficient(batch_tp_display, batch_fp_display, batch_fn_display)
-                    batch_iou = iou_score(batch_tp_display, batch_fp_display, batch_fn_display)
-
-                    val_bar.set_postfix(
-                        loss=f"{loss.item():.4f}",
-                        dice=f"{batch_dice:.4f}",
-                        iou=f"{batch_iou:.4f}",
-                    )
                     val_bar.update(1)
 
-        val_loss = running_loss / max(total_samples, 1)
+        # Sync once at validation end
+        if self.is_xla:
+            _get_xm().mark_step()
+
+        val_loss = float(total_loss_tensor.cpu().item()) / max(total_samples, 1)
+        tp = int(tp_tensor.cpu().item())
+        fp = int(fp_tensor.cpu().item())
+        fn = int(fn_tensor.cpu().item())
+        tn = int(tn_tensor.cpu().item())
+
         metrics = {
             "val_loss": val_loss,
             "tp": tp,

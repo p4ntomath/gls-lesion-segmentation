@@ -28,7 +28,7 @@ processing:
 training:
   optimizer: "adam"
   learning_rate: 0.0001
-  batch_size: 4
+  batch_size: 8                             # increased from 4 for TPU matrix unit utilization
   max_epochs: 100
   early_stopping_patience: 999999           # disabled: do not stop early unless explicitly configured
   loss: "bce_dice"
@@ -36,4 +36,4 @@ training:
   threshold: 0.5                             # §4.2.7
   augmentation: false                        # overridden per experiment, see experiments/*/config.yaml
   use_leaf_masking: true                     # leaf masking enabled by default
-  num_workers: 0                             # TPU-safe default; multiprocessing can cause issues on XLA
+  num_workers: 4                             # multi-process data loading to prevent CPU pipeline starvation
