@@ -181,6 +181,7 @@ def main(
         patience=patience if patience is not None else config["training"].get("early_stopping_patience", 15),
         start_epoch=start_epoch,
         epochs_without_improvement=epochs_without_improvement,
+        clean_latest=True,
     )
 
 

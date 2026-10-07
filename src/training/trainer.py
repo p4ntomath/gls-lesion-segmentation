@@ -429,7 +429,24 @@ class Trainer:
             writer.writeheader()
             writer.writerows(self.history)
 
-    def fit(self, max_epochs, patience, *, start_epoch: int = 1, epochs_without_improvement: int = 0) -> None:
+    def clean_latest_checkpoint(self) -> None:
+        """Remove the temporary latest checkpoint if best checkpoint exists to conserve disk space."""
+        if self.best_checkpoint_path.exists() and self.latest_checkpoint_path.exists():
+            try:
+                self.latest_checkpoint_path.unlink()
+                print(f"Removed temporary latest checkpoint to save space: {self.latest_checkpoint_path.name}", flush=True)
+            except OSError as exc:
+                print(f"Warning: could not remove {self.latest_checkpoint_path}: {exc}", flush=True)
+
+    def fit(
+        self,
+        max_epochs,
+        patience,
+        *,
+        start_epoch: int = 1,
+        epochs_without_improvement: int = 0,
+        clean_latest: bool | None = None,
+    ) -> None:
         patience = int(patience)
 
         self.max_epochs = int(max_epochs)
@@ -483,3 +500,7 @@ class Trainer:
             if epochs_without_improvement >= patience:
                 print(f"Early stopping at epoch {epoch} (best epoch: {self.best_epoch}).", flush=True)
                 break
+
+        should_clean = clean_latest if clean_latest is not None else bool(self.config.get("training", {}).get("clean_latest_checkpoint", False))
+        if should_clean:
+            self.clean_latest_checkpoint()

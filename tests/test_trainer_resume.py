@@ -87,3 +87,14 @@ def test_resume_rejects_mismatched_config_by_default(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="config fingerprint"):
         resumed.resume_from_checkpoint()
+
+
+def test_clean_latest_checkpoint_on_finish(tmp_path: Path) -> None:
+    config = _build_config(tmp_path)
+    train_loader, val_loader = _build_loaders()
+
+    trainer = Trainer(_build_model(), train_loader, val_loader, config)
+    trainer.fit(max_epochs=1, patience=10, clean_latest=True)
+
+    assert trainer.best_checkpoint_path.exists()
+    assert not trainer.latest_checkpoint_path.exists()

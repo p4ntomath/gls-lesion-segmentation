@@ -37,3 +37,4 @@ training:
   augmentation: false                        # overridden per experiment, see experiments/*/config.yaml
   use_leaf_masking: true                     # leaf masking enabled by default
   num_workers: 4                             # multi-process data loading to prevent CPU pipeline starvation
+  clean_latest_checkpoint: true             # delete temporary _latest.pt checkpoint upon training completion to save disk space
