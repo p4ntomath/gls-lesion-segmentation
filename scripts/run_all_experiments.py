@@ -156,7 +156,6 @@ def execute_single_job(
             patience=patience,
             seed=seed,
             output_tag=tag,
-            clean_latest=True,
         )
         print(f"[Worker {worker_id}] <<< FINISHED TRAINING: {experiment} | {tag}", flush=True)
 
