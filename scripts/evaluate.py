@@ -314,9 +314,18 @@ def _load_leaf_masks(leaf_masks_dir: Path, sample_ids: list[str], image_size: in
     return leaf_masks, missing
 
 
-def main(experiment: str, config_path: str = "configs/base.yaml", output_tag: str = "") -> None:
+def main(
+    experiment: str,
+    config_path: str = "configs/base.yaml",
+    output_tag: str = "",
+    device: str | torch.device | None = None,
+) -> dict:
     config = load_experiment_config(experiment, config_path=config_path)
-    set_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if device is not None:
+        set_device = torch.device(device) if isinstance(device, str) else device
+    else:
+        set_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Build the tagged name used for checkpoint and results paths
     experiment_name = f"{experiment}_{output_tag}" if output_tag else experiment
@@ -421,6 +430,7 @@ def main(experiment: str, config_path: str = "configs/base.yaml", output_tag: st
         json.dump(results, f, indent=2)
 
     print(f"Saved evaluation results to {results_path}")
+    return results
 
 if __name__ == "__main__":
     import argparse
