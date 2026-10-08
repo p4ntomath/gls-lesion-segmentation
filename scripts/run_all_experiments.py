@@ -203,6 +203,8 @@ def _tpu_worker_entry(
         flush=True,
     )
 
+    failed_jobs: list[str] = []
+
     for step, job in enumerate(worker_jobs, start=1):
         print(
             f"\n[Worker {index}] Progress: job {step}/{len(worker_jobs)} "
@@ -219,9 +221,17 @@ def _tpu_worker_entry(
                 config_path=config_path,
             )
         except Exception as exc:
-            print(f"[Worker {index}] ERROR on {job['experiment']}/{job['tag']}: {exc}", flush=True)
             import traceback
+            label = f"{job['experiment']}/{job['tag']}"
+            print(f"[Worker {index}] ERROR on {label}: {exc}", flush=True)
             traceback.print_exc()
+            failed_jobs.append(label)
+
+    if failed_jobs:
+        summary = ", ".join(failed_jobs)
+        raise RuntimeError(
+            f"[Worker {index}] {len(failed_jobs)} job(s) failed: {summary}"
+        )
 
     print(f"\n[Worker {index}] ALL ASSIGNED JOBS COMPLETED!", flush=True)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -80,6 +81,14 @@ def build_loaders(config: dict, seed: int = 42):
     image_size = int(data_cfg.get("image_size", 256))
     batch_size = int(training_cfg.get("batch_size", 8))
     num_workers = int(training_cfg.get("num_workers", 0))
+
+    # Under XLA/PJRT, each of the 4 TPU workers would spawn its own
+    # DataLoader worker sub-processes, creating 4×num_workers processes
+    # total. This nested multiprocessing deadlocks at the first batch.
+    # Force num_workers=0 (main-process data loading) when inside an XLA
+    # worker; the MpDeviceLoader handles device prefetching instead.
+    if os.environ.get("GLS_DEVICE", "").lower() == "xla":
+        num_workers = 0
 
     apply_leaf_masking = bool(training_cfg.get("use_leaf_masking", False))
     train_transform = get_train_transforms(image_size, with_leaf=apply_leaf_masking) if training_cfg.get("augmentation", False) else get_eval_transforms(image_size, with_leaf=apply_leaf_masking)
