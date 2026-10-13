@@ -18,6 +18,8 @@ Output columns (data/processed/manifest.csv):
     num_instances   -- number of GLS lesion instances annotated for this image
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
