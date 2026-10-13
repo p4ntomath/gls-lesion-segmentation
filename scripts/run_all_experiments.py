@@ -264,7 +264,8 @@ def compile_master_results() -> list[dict[str, Any]]:
         summary = data.get("summary", {})
 
         try:
-            seed = int(output_tag.removeprefix("seed"))
+            tag_val = output_tag[4:] if output_tag.startswith("seed") else output_tag
+            seed = int(tag_val)
         except ValueError:
             continue
 
