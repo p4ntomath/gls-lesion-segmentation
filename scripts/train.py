@@ -85,8 +85,7 @@ def build_loaders(config: dict, seed: int = 42):
     # Under XLA/PJRT, each of the 4 TPU workers would spawn its own
     # DataLoader worker sub-processes, creating 4×num_workers processes
     # total. This nested multiprocessing deadlocks at the first batch.
-    # Force num_workers=0 (main-process data loading) when inside an XLA
-    # worker; the MpDeviceLoader handles device prefetching instead.
+    # Force num_workers=0 (main-process data loading) when inside an XLA worker.
     if os.environ.get("GLS_DEVICE", "").lower() == "xla":
         num_workers = 0
 

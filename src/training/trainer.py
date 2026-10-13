@@ -204,12 +204,6 @@ class Trainer:
         total_samples = 0
 
         loader = self.train_loader
-        if self.is_xla:
-            try:
-                from torch_xla.distributed.parallel_loader import MpDeviceLoader
-                loader = MpDeviceLoader(self.train_loader, self.device)
-            except Exception:
-                loader = self.train_loader
 
         with create_progress_bar(total=len(self.train_loader), desc=f"Epoch {self.current_epoch}/{self.max_epochs} training", leave=False) as train_bar:
             for batch_idx, batch in enumerate(loader, start=1):
@@ -261,12 +255,6 @@ class Trainer:
         total_samples = 0
 
         loader = self.val_loader
-        if self.is_xla:
-            try:
-                from torch_xla.distributed.parallel_loader import MpDeviceLoader
-                loader = MpDeviceLoader(self.val_loader, self.device)
-            except Exception:
-                loader = self.val_loader
 
         with torch.no_grad():
             with create_progress_bar(total=len(self.val_loader), desc="Validating", leave=False) as val_bar:
@@ -352,7 +340,10 @@ class Trainer:
         if self.is_xla:
             # xm.save() moves XLA tensors to CPU before pickling, producing a
             # portable checkpoint that can be loaded on any device.
-            _get_xm().save(payload, str(checkpoint_path))
+            # master_only=False is critical because 4 independent experiments
+            # run simultaneously on the 4 TPU cores; non-master workers (ranks 1, 2, 3)
+            # must each write their own respective checkpoint to disk.
+            _get_xm().save(payload, str(checkpoint_path), master_only=False)
         else:
             torch.save(payload, checkpoint_path)
 
