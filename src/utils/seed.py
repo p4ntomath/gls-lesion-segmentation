@@ -30,6 +30,7 @@ def set_seed(seed: int) -> None:
     # ── XLA / TPU (only when torch_xla is installed) ─────────────────────────
     try:
         import torch_xla.core.xla_model as xm  # type: ignore[import]
-        xm.set_rng_state(seed)
+        device = xm.xla_device()
+        xm.set_rng_state(seed, device)
     except (ImportError, AttributeError):
         pass  # torch_xla not installed — no-op on CPU/CUDA
