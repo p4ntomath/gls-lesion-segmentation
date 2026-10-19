@@ -105,6 +105,36 @@ def test_dataset_getitem_shapes(tmp_path: Path) -> None:
     assert set(np.unique(mask.numpy())).issubset({0.0, 1.0})
 
 
+def test_dataset_preserves_bright_normalized_values(tmp_path: Path) -> None:
+    image_dir = tmp_path / "images"
+    mask_dir = tmp_path / "masks"
+    split_dir = tmp_path / "splits"
+    image_dir.mkdir(parents=True)
+    mask_dir.mkdir(parents=True)
+    split_dir.mkdir(parents=True)
+
+    sample_id = "0001"
+    Image.new("RGB", (4, 4), color=(255, 255, 255)).save(image_dir / f"{sample_id}.jpg")
+    Image.new("L", (4, 4), color=0).save(mask_dir / f"{sample_id}.png")
+    (split_dir / "train.txt").write_text(f"{sample_id}\n", encoding="utf-8")
+
+    dataset = GLSDataset(
+        split_dir / "train.txt",
+        image_dir,
+        mask_dir,
+        image_size=4,
+        transform=get_eval_transforms(4),
+    )
+
+    image, _ = dataset[0]
+
+    expected = torch.tensor(
+        [(1.0 - 0.485) / 0.229, (1.0 - 0.456) / 0.224, (1.0 - 0.406) / 0.225]
+    )
+    assert torch.allclose(image[:, 0, 0], expected, atol=0.02)
+    assert image.max() > 1.0
+
+
 def test_dataset_applies_leaf_mask_to_input_and_target(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     mask_dir = tmp_path / "masks"

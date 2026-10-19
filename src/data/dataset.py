@@ -113,8 +113,6 @@ class GLSDataset(torch.utils.data.Dataset):
             mask = mask.unsqueeze(0)
 
         image = image.float()
-        if image.max() > 1.0:
-            image = image.div(255.0)
         mask = mask.float()
         if mask.max() > 1.0:
             mask = (mask > 0).float()
